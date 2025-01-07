@@ -109,7 +109,7 @@ impl ApplicationHandler for App {
             attributes = attributes.with_canvas(get_canvas(App::CANVAS_ID));
         }
 
-        // Create the window.
+        // Create the window, and launch async WGPU setup.
         match event_loop.create_window(attributes) {
             Err(os_error) => {
                 panic!("Could not creating window: {:?}", os_error)
@@ -117,37 +117,11 @@ impl ApplicationHandler for App {
             Ok(window) => {
                 let window = Arc::new(window);
                 self.window = Some(window.clone());
-
-                // Set up requirements for WGPU context.
-                let instance_descriptor = wgpu::InstanceDescriptor {
-                    backends: App::BACKENDS,
-                    ..Default::default()
-                };
-                let request_adapter_options = wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::default(),
-                    compatible_surface: None, // filled in by `FutureWgpuContext`
-                    force_fallback_adapter: false,
-                };
-                let device_descriptor = wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    label: Some("Device Descriptor"),
-                    memory_hints: Default::default(),
-                };
-
-                // Launch WGPU context setup.
-                //
-                // Here, we are handing off further configuration of WGPU to
-                // the window event handler, [`window_event`].
-                self.wgpu_context = Some(FutureWgpuContext::new(
-                    window.clone(),
-                    instance_descriptor,
-                    request_adapter_options,
-                    device_descriptor,
-                ));
+                self.wgpu_context = Some(create_wgpu_context(window));
             }
         }
     }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         // Fetch WGPU context.
         /*
@@ -163,6 +137,42 @@ impl ApplicationHandler for App {
             _ => (),
         }
     }
+}
+
+/// Create the WGPU context.
+///
+/// This launches the creation of the async parts of the WGPU context. The
+/// rest of the application continues while we're waiting for them. The
+/// [`FutureWgpuContext`] can be queried from the event loop of the application
+/// to see when WGPU is ready.
+fn create_wgpu_context(window: Arc<Window>) -> FutureWgpuContext {
+    // Set up requirements for WGPU context.
+    let instance_descriptor = wgpu::InstanceDescriptor {
+        backends: App::BACKENDS,
+        ..Default::default()
+    };
+    let request_adapter_options = wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None, // filled in by `FutureWgpuContext`
+        force_fallback_adapter: false,
+    };
+    let device_descriptor = wgpu::DeviceDescriptor {
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::default(),
+        label: Some("Device Descriptor"),
+        memory_hints: Default::default(),
+    };
+
+    // Launch WGPU context setup.
+    //
+    // Here, we are handing off further configuration of WGPU to
+    // the window event handler, [`window_event`].
+    FutureWgpuContext::new(
+        window.clone(),
+        instance_descriptor,
+        request_adapter_options,
+        device_descriptor,
+    )
 }
 
 /// Get the HTML canvas element named `canvas_id` on the **WASM32** platform.
