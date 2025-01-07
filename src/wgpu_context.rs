@@ -1,15 +1,16 @@
 //! Creates WGPU context that must run async.
 //!
-//! Two important parts of the WGPU API are async functions:
-//!   - Creating a new WGPU instance.
-//!   - Requesting a new WGPU adapter.
+//! Three important parts of the WGPU API are async functions:
+//!   - Creating a new WGPU Instance.
+//!   - Requesting a new WGPU Adapter.
+//!   - Creating a WGPU Device and Queue.
 //!   
-//! In non-web applications, we would like to block on these two functions.
-//! However, for WASM (web) usage, we cannot block.
+//! In non-web applications, we would like to block on these functions. However,
+//! for WASM (web) usage, we cannot block.
 //!
 //! The solution here is something called [`FutureWgpuContext`]. The idea is
-//! that you pass the structures necessary to construct the WGPU Instance,
-//! Adapter and Surface. Then [`FutureWgpuContext`] can be queried using
+//! that you pass the structures necessary to construct the WGPU components that
+//! are async. Then [`FutureWgpuContext`] can be queried using
 //! [`FutureWgpuContext::retrieve`], until it returns a completed value. This
 //! querying should be done in the application's event loop, to avoid blocking
 //! anything else.
