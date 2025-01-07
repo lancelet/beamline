@@ -55,7 +55,7 @@ fn run_app() -> Result<(), EventLoopError> {
 #[derive(Debug, Default)]
 pub struct App {
     window: Option<Arc<Window>>,
-    future_wgpu_context: Option<FutureWgpuContext>,
+    wgpu_context: Option<FutureWgpuContext>,
 }
 impl App {
     const LOG_LEVEL_FILTER: Option<LevelFilter> = None;
@@ -82,7 +82,7 @@ impl App {
     /// - `None`: if the WgpuContext creation is still pending.
     #[allow(unused)] // TODO: Development
     fn wgpu_context(&mut self) -> Option<&WgpuContext> {
-        self.future_wgpu_context
+        self.wgpu_context
             .as_ref()
             .map(FutureWgpuContext::retrieve_option)
             .expect(
@@ -128,15 +128,22 @@ impl ApplicationHandler for App {
                     compatible_surface: None, // filled in by `FutureWgpuContext`
                     force_fallback_adapter: false,
                 };
+                let device_descriptor = wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    label: Some("Device Descriptor"),
+                    memory_hints: Default::default(),
+                };
 
                 // Launch WGPU context setup.
                 //
                 // Here, we are handing off further configuration of WGPU to
                 // the window event handler, [`window_event`].
-                self.future_wgpu_context = Some(FutureWgpuContext::new(
+                self.wgpu_context = Some(FutureWgpuContext::new(
                     window.clone(),
                     instance_descriptor,
                     request_adapter_options,
+                    device_descriptor,
                 ));
             }
         }

@@ -32,6 +32,10 @@ pub struct WgpuContext {
     pub surface: wgpu::Surface<'static>,
     /// Selected WGPU Adapter.
     pub adapter: wgpu::Adapter,
+    /// Selected WGPU Device.
+    pub device: wgpu::Device,
+    /// Selected WGPU Queue.
+    pub queue: wgpu::Queue,
 }
 
 impl WgpuContext {
@@ -47,9 +51,12 @@ impl WgpuContext {
         window: impl Into<wgpu::SurfaceTarget<'static>> + 'static,
         instance_descriptor: wgpu::InstanceDescriptor,
         request_adapter_options: wgpu::RequestAdapterOptions<'static, 'static>,
+        device_descriptor: wgpu::DeviceDescriptor<'static>,
     ) -> Self {
         let instance = wgpu::Instance::new(instance_descriptor);
-        let surface = instance.create_surface(window).unwrap();
+        let surface = instance
+            .create_surface(window)
+            .expect("Could not create WGPU Surface.");
 
         let adapter_options_for_surface = wgpu::RequestAdapterOptions {
             power_preference: request_adapter_options.power_preference,
@@ -60,9 +67,19 @@ impl WgpuContext {
         let adapter = instance
             .request_adapter(&adapter_options_for_surface)
             .await
-            .unwrap();
+            .expect("Could not create WGPU Adapter.");
 
-        WgpuContext { surface, adapter }
+        let (device, queue) = adapter
+            .request_device(&device_descriptor, None)
+            .await
+            .expect("Could not create WGPU Device and Queue.");
+
+        WgpuContext {
+            surface,
+            adapter,
+            device,
+            queue,
+        }
     }
 }
 
@@ -114,11 +131,17 @@ impl FutureWgpuContext {
         window: impl Into<wgpu::SurfaceTarget<'static>> + 'static,
         instance_descriptor: wgpu::InstanceDescriptor,
         request_adapter_options: wgpu::RequestAdapterOptions<'static, 'static>,
+        device_descriptor: wgpu::DeviceDescriptor<'static>,
     ) -> Self {
         FutureWgpuContext {
             value_cell: OnceCell::new(),
             receiver: RefCell::new(FutureWgpuContext::spawn_receiver(|| {
-                WgpuContext::new_async(window, instance_descriptor, request_adapter_options)
+                WgpuContext::new_async(
+                    window,
+                    instance_descriptor,
+                    request_adapter_options,
+                    device_descriptor,
+                )
             })),
         }
     }
