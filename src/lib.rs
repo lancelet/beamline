@@ -16,25 +16,49 @@ use winit::{
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+/// Run the application.
+///
+/// This is effectively the main entry point for the whole app, one level
+/// above winit. It is also the **WASM32** entry point. It tries to run the
+/// app, and panics if unable to do so.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn run() {
     run_app().unwrap(); // Panic on error (intentional).
 }
 
+/// Run the application.
+///
+/// This is effectively the main entry point for winit. It sets up the winit
+/// event loop and runs the `App` with it.
 fn run_app() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::builder().build()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App::default();
-    event_loop.run_app(&mut app)
+
+    // The application is launched two different ways for WASM32 and native.
+    cfg_if! {
+        if #[cfg(target_arch = "wasm32")] {
+            // For WASM32, we "spawn" the app and return immediately. This
+            // avoids a log message from winit saying that it's using
+            // exceptions for control flow (!).
+            use winit::platform::web::EventLoopExtWebSys;
+            let app = App::default();
+            event_loop.spawn_app(app);
+            Ok(())
+        } else {
+            // For native platforms, we call `run_app` instead.
+            let mut app = App::default();
+            event_loop.run_app(&mut app)
+        }
+    }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct App {
     window: Option<Arc<Window>>,
     future_wgpu_context: Option<FutureWgpuContext>,
 }
 impl App {
-    const LOG_LEVEL_FILTER: LevelFilter = LevelFilter::Trace;
+    const LOG_LEVEL_FILTER: Option<LevelFilter> = None;
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             const CANVAS_ID: &str = "linerender-host-canvas";
@@ -167,22 +191,29 @@ fn get_canvas(canvas_id: &str) -> Option<wgpu::web_sys::HtmlCanvasElement> {
 ///
 /// # Parameters
 ///
-/// - `level_filter`: The logging level to be applied globally.
+/// - `level_filter`: The logging level to be applied globally. If this is
+///   not set, then default logging levels are used.
 ///
 /// # Panics
 ///
 /// - On **WASM32**, the function will panic if the `console_log` fails to
 ///   initialize.
-fn init_logger(level_filter: LevelFilter) {
+fn init_logger(level_filter: Option<LevelFilter>) {
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
-            let log_level = level_filter.to_level().unwrap_or(log::Level::Warn);
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-            console_log::init_with_level(log_level).expect("Could not initialize WASM32 logger");
+            let opt_logger = match level_filter {
+                None => console_log::init(),
+                Some(level_filt) => {
+                    let level = level_filt.to_level().unwrap_or(log::Level::Warn);
+                    console_log::init_with_level(level)
+                }
+            };
+            opt_logger.expect("Could not initialize WASM32 logger.")
         } else {
-            env_logger::Builder::from_default_env()
-                .filter_level(level_filter)
-                .init();
+            let mut builder = env_logger::Builder::from_default_env();
+            level_filter.map(|level| builder.filter_level(level));
+            builder.init()
         }
     }
 }

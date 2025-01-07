@@ -94,6 +94,7 @@ impl AsyncWgpuContextResult {
 }
 
 /// A possibly-ongoing async computation to create a [`WgpuContext`].
+#[derive(Debug)]
 pub struct FutureWgpuContext {
     value_cell: OnceCell<AsyncWgpuContextResult>,
     receiver: RefCell<Receiver<WgpuContext>>,
