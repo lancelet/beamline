@@ -1,10 +1,11 @@
 #[allow(unused)] // TODO: For development.
 mod wgpu_context;
 
+use bytemuck::bytes_of;
 use cfg_if::cfg_if;
 use log::{trace, warn, LevelFilter};
 use std::sync::Arc;
-use wgpu::SurfaceConfiguration;
+use wgpu::{util::DeviceExt, SurfaceConfiguration};
 use wgpu_context::{FutureWgpuContext, WgpuContext};
 use winit::{
     application::ApplicationHandler,
@@ -33,7 +34,8 @@ pub fn run() {
 /// event loop and runs the `App` with it.
 fn run_app() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::builder().build()?;
-    event_loop.set_control_flow(ControlFlow::Poll);
+    //event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     // The application is launched two different ways for WASM32 and native.
     cfg_if! {
@@ -53,6 +55,15 @@ fn run_app() -> Result<(), EventLoopError> {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+    width: u32,
+    height: u32,
+    bucket_width: u32,
+    bucket_height: u32,
+}
+
 #[derive(Debug, Default)]
 pub struct App {
     /// The Application's winit window.
@@ -65,6 +76,10 @@ pub struct App {
     surface_configuration: Option<wgpu::SurfaceConfiguration>,
     /// Render pipeline for WGPU.
     render_pipeline: Option<wgpu::RenderPipeline>,
+    /// Layout for the camera bind group.
+    camera_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    /// Camera uniform buffer.
+    camera_buffer: Option<wgpu::Buffer>,
 }
 impl App {
     /// Override the application logging level.
@@ -171,7 +186,7 @@ impl App {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0],
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -200,9 +215,26 @@ impl App {
         let shader_module_descriptor = wgpu::include_wgsl!("shader.wgsl");
         let shader = device.create_shader_module(shader_module_descriptor);
 
+        let camera_layout_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let camera_bind_group_layout_descriptor = wgpu::BindGroupLayoutDescriptor {
+            entries: &[camera_layout_entry],
+            label: Some("Camera Bind Group Layout"),
+        };
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&camera_bind_group_layout_descriptor);
+
         let pipeline_layout_descriptor = wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&camera_bind_group_layout],
             push_constant_ranges: &[],
         };
         let render_pipeline_layout = device.create_pipeline_layout(&pipeline_layout_descriptor);
@@ -250,12 +282,36 @@ impl App {
         };
         let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
 
+        self.camera_bind_group_layout = Some(camera_bind_group_layout);
         self.render_pipeline = Some(render_pipeline);
     }
 
     /// Return a reference to the WGPU RenderPipeline.
     fn render_pipeline(&self) -> &wgpu::RenderPipeline {
         self.render_pipeline.as_ref().unwrap()
+    }
+
+    /// Create the camera buffer; large enough to contain one CameraUniform.
+    fn create_camera_buffer(&mut self) {
+        let camera_uniform: [CameraUniform; 1] = [Default::default()];
+        let device = self.wgpu_context().device();
+        let buffer_init_descriptor = wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Buffer: View Parameters"),
+            contents: bytemuck::cast_slice(&camera_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        };
+        let camera_buffer = device.create_buffer_init(&buffer_init_descriptor);
+        self.camera_buffer = Some(camera_buffer);
+    }
+
+    /// Return the camera buffer.
+    fn camera_buffer(&self) -> &wgpu::Buffer {
+        self.camera_buffer.as_ref().unwrap()
+    }
+
+    /// Return the layout of the camera bind group.
+    fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        self.camera_bind_group_layout.as_ref().unwrap()
     }
 
     /// Configure the surface post-resize. This sets the size of the surface.
@@ -289,6 +345,7 @@ impl App {
                 // Perform extra WGPU setup.
                 self.choose_surface_configuration();
                 self.create_render_pipeline();
+                self.create_camera_buffer();
                 self.extra_wgpu_setup_completed = true;
                 self.resize();
             } else {
@@ -308,7 +365,10 @@ impl App {
             return Ok(());
         }
 
-        let output_texture = self.wgpu_context().surface().get_current_texture()?;
+        let ctx = self.wgpu_context();
+        let device = ctx.device();
+
+        let output_texture = ctx.surface().get_current_texture()?;
         let view = output_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -319,6 +379,25 @@ impl App {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Render Command Encoder"),
                 });
+
+        let size = self.window().inner_size();
+        let camera_uniform = CameraUniform {
+            width: size.width,
+            height: size.height,
+            bucket_width: 32,
+            bucket_height: 32,
+        };
+        ctx.queue()
+            .write_buffer(self.camera_buffer(), 0, bytes_of(&camera_uniform));
+
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: self.camera_bind_group_layout(),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.camera_buffer().as_entire_binding(),
+            }],
+            label: Some("Camera Bind Group"),
+        });
 
         {
             let rpca = wgpu::RenderPassColorAttachment {
@@ -339,7 +418,8 @@ impl App {
             });
 
             render_pass.set_pipeline(self.render_pipeline());
-            render_pass.draw(0..6, 0..1);
+            render_pass.set_bind_group(0, &camera_bind_group, &[]);
+            render_pass.draw(0..6, 0..6); // 6 vertices, 6 indices
         }
 
         self.wgpu_context()
