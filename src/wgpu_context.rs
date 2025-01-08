@@ -82,6 +82,21 @@ impl WgpuContext {
             queue,
         }
     }
+
+    /// Return a reference to the WGPU Surface.
+    pub fn surface(&self) -> &wgpu::Surface {
+        &self.surface
+    }
+
+    /// Return a reference to the WGPU Adapter.
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+
+    /// Return a reference to the WGPU Device.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
 }
 
 /// Result of an async computation to create a [`WgpuContext`].

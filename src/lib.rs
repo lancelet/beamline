@@ -2,8 +2,9 @@
 mod wgpu_context;
 
 use cfg_if::cfg_if;
-use log::LevelFilter;
+use log::{trace, warn, LevelFilter};
 use std::sync::Arc;
+use wgpu::SurfaceConfiguration;
 use wgpu_context::{FutureWgpuContext, WgpuContext};
 use winit::{
     application::ApplicationHandler,
@@ -54,11 +55,21 @@ fn run_app() -> Result<(), EventLoopError> {
 
 #[derive(Debug, Default)]
 pub struct App {
+    /// The Application's winit window.
     window: Option<Arc<Window>>,
+    /// WGPU context - has async setup.
     wgpu_context: Option<FutureWgpuContext>,
+    /// Flag to indicate whether all WGPU setup has finished.
+    extra_wgpu_setup_completed: bool,
+    /// Surface configuration for WGPU.
+    surface_configuration: Option<wgpu::SurfaceConfiguration>,
 }
 impl App {
-    const LOG_LEVEL_FILTER: Option<LevelFilter> = None;
+    /// Override the application logging level.
+    ///
+    /// Set this to override the logging level for both **WASM32** and
+    /// **Native** applications.
+    const LOG_LEVEL_FILTER: Option<LevelFilter> = Some(LevelFilter::Trace);
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             const CANVAS_ID: &str = "linerender-host-canvas";
@@ -68,27 +79,148 @@ impl App {
         }
     }
 
-    /// Fetches the WGPU context if it is available yet.
+    /// Return a reference to the application window, incrementing its
+    /// reference count.
+    fn window(&self) -> Arc<Window> {
+        self.window.clone().unwrap()
+    }
+
+    /// Fetches the WGPU context if it is available.
+    ///
+    /// The setup of the WGPU context is started when the application launches,
+    /// in the [`App::resumed`] method. The initialization then runs async and
+    /// posts when it is finished. If the WGPU context is available,
     ///
     /// # Panics
     ///
-    /// - If the WGPU context is requested before the App has been initialized
-    ///   (in the [`ApplicationHandler::resumed`]) method).
-    /// - If the processing to create the `WgpuContext` was canceled.
+    /// - If this method is called before `App::resumed`.
+    /// - If creating the `WgpuContext` was canceled.
     ///
     /// # Returns
     ///
-    /// - `Some(wgpu_context)`: if the WgpuContext has been created.
-    /// - `None`: if the WgpuContext creation is still pending.
-    #[allow(unused)] // TODO: Development
-    fn wgpu_context(&mut self) -> Option<&WgpuContext> {
+    /// - `Some(wgpu_context)`: if the `WgpuContext` was created.
+    /// - `None`: if the `WgpuContext` is still pending.
+    fn optional_wgpu_context(&self) -> Option<&WgpuContext> {
         self.wgpu_context
             .as_ref()
-            .map(FutureWgpuContext::retrieve_option)
+            .map(|ctx| ctx.retrieve_option())
             .expect(
-                "Attempted to fetch the WGPU context before it was \
-                 initialized in ApplicationHandler::resumed.",
+                "App::resumed must have been called before you call this \
+                 method.",
             )
+    }
+
+    /// Fetches the WGPU context, making the assumption it is available.
+    ///
+    /// The setup of the WGPU context is started when the application launches,
+    /// in the [`App::resumed`] method. The initialization then runs async and
+    /// posts when it is finished. If the WGPU context is available,
+    ///
+    ///
+    /// # Panics
+    ///
+    /// - If this method is called before `App::resumed`.
+    /// - If creating the `WgpuContext` was canceled.
+    /// - If the `WgpuContext` is not available yet.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the `WgpuContext`.
+    fn wgpu_context(&self) -> &WgpuContext {
+        self.optional_wgpu_context()
+            .expect("WgpuContext was not (yet) available.")
+    }
+
+    /// Choose the surface configuration for rendering.
+    ///
+    /// We want an SRGB surface. This must be called after the WGPU context is
+    /// available.
+    fn choose_surface_configuration(&mut self) {
+        let ctx = self.wgpu_context();
+        let surface_caps = ctx.surface().get_capabilities(ctx.adapter());
+
+        // find an sRGB surface
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .find(|f| f.is_srgb())
+            .copied()
+            .unwrap_or({
+                warn!(
+                    "Could not select sRGB surface format. Falling back to \
+                     first format available."
+                );
+                surface_caps.formats[0]
+            });
+        trace!("Surface format: {:?}", surface_format);
+
+        let size = self.window().inner_size();
+        let surface_configuration = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: size.width,
+            height: size.height,
+            present_mode: surface_caps.present_modes[0],
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        self.surface_configuration = Some(surface_configuration);
+
+        trace!("Chose surface configuration.");
+    }
+
+    /// Return a reference to the WGPU SurfaceConfiguration.
+    fn surface_configuration(&self) -> &SurfaceConfiguration {
+        self.surface_configuration.as_ref().unwrap()
+    }
+
+    /// Return a mutable reference to the WGPU SurfaceConfiguration.
+    fn surface_configuration_mut(&mut self) -> &mut SurfaceConfiguration {
+        self.surface_configuration.as_mut().unwrap()
+    }
+
+    /// Configure the surface post-resize. This sets the size of the surface.
+    fn resize(&mut self) {
+        // The window might be resized before WGPU setup has finished. If so,
+        // just bail.
+        if !self.extra_wgpu_setup_completed {
+            return;
+        }
+        let size = self.window().inner_size();
+        if size.width > 0 && size.height > 0 {
+            {
+                let cfg = self.surface_configuration_mut();
+                cfg.width = size.width;
+                cfg.height = size.height;
+            }
+            let ctx = self.wgpu_context();
+            ctx.surface()
+                .configure(ctx.device(), self.surface_configuration())
+        }
+        trace!("Configured surface size: {:?}", size);
+    }
+
+    /// Finish the WGPU static setup.
+    ///
+    /// This should be called from the event loop once the `WgpuContext` has
+    /// finished its async setup and is available.
+    fn finish_wgpu_static_setup(&mut self) {
+        if !self.extra_wgpu_setup_completed {
+            if self.optional_wgpu_context().is_some() {
+                // Perform extra WGPU setup.
+                self.choose_surface_configuration();
+                self.extra_wgpu_setup_completed = true;
+                self.resize();
+            } else {
+                // If we reach here, the extra WGPU setup wasn't yet completed,
+                // and we're waiting for the WgpuContext to finish its async
+                // creation. So, request a redraw so that we can try again on
+                // the next frame.
+                self.window().request_redraw();
+            }
+        }
     }
 }
 
@@ -123,17 +255,14 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        // Fetch WGPU context.
-        /*
-        if let Some(wgpu_context) = self.wgpu_context() {
-            info!("WGPU context was created");
-        } else {
-            info!("Waiting for WGPU context to be created");
-        }
-        */
-        use WindowEvent::CloseRequested;
+        // Finish any WGPU static setup. This just bails immediately if the
+        // setup has been completed.
+        self.finish_wgpu_static_setup();
+
+        use WindowEvent::{CloseRequested, Resized};
         match event {
             CloseRequested => event_loop.exit(),
+            Resized(_) => self.resize(),
             _ => (),
         }
     }
