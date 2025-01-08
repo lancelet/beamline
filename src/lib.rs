@@ -63,6 +63,8 @@ pub struct App {
     extra_wgpu_setup_completed: bool,
     /// Surface configuration for WGPU.
     surface_configuration: Option<wgpu::SurfaceConfiguration>,
+    /// Render pipeline for WGPU.
+    render_pipeline: Option<wgpu::RenderPipeline>,
 }
 impl App {
     /// Override the application logging level.
@@ -70,6 +72,15 @@ impl App {
     /// Set this to override the logging level for both **WASM32** and
     /// **Native** applications.
     const LOG_LEVEL_FILTER: Option<LevelFilter> = Some(LevelFilter::Trace);
+
+    /// Background color.
+    const BACKGROUND_COLOR: wgpu::Color = wgpu::Color {
+        r: 0.1,
+        g: 0.2,
+        b: 0.3,
+        a: 1.0,
+    };
+
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             const CANVAS_ID: &str = "linerender-host-canvas";
@@ -181,6 +192,72 @@ impl App {
         self.surface_configuration.as_mut().unwrap()
     }
 
+    /// Set up the render pipeline.
+    fn create_render_pipeline(&mut self) {
+        let ctx = self.wgpu_context();
+        let device = ctx.device();
+
+        let shader_module_descriptor = wgpu::include_wgsl!("shader.wgsl");
+        let shader = device.create_shader_module(shader_module_descriptor);
+
+        let pipeline_layout_descriptor = wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        };
+        let render_pipeline_layout = device.create_pipeline_layout(&pipeline_layout_descriptor);
+        let vertex_state = wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        };
+        let color_target_state = wgpu::ColorTargetState {
+            format: self.surface_configuration().format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let fragment_state = wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(color_target_state)],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        };
+        let primitive_state = wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        };
+        let multisample_state = wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        };
+        let render_pipeline_descriptor = wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: vertex_state,
+            fragment: Some(fragment_state),
+            primitive: primitive_state,
+            depth_stencil: None,
+            multisample: multisample_state,
+            multiview: None,
+            cache: None,
+        };
+        let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
+
+        self.render_pipeline = Some(render_pipeline);
+    }
+
+    /// Return a reference to the WGPU RenderPipeline.
+    fn render_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.render_pipeline.as_ref().unwrap()
+    }
+
     /// Configure the surface post-resize. This sets the size of the surface.
     fn resize(&mut self) {
         // The window might be resized before WGPU setup has finished. If so,
@@ -211,6 +288,7 @@ impl App {
             if self.optional_wgpu_context().is_some() {
                 // Perform extra WGPU setup.
                 self.choose_surface_configuration();
+                self.create_render_pipeline();
                 self.extra_wgpu_setup_completed = true;
                 self.resize();
             } else {
@@ -219,6 +297,77 @@ impl App {
                 // creation. So, request a redraw so that we can try again on
                 // the next frame.
                 self.window().request_redraw();
+            }
+        }
+    }
+
+    /// Render a single frame.
+    fn render(&self) -> Result<(), wgpu::SurfaceError> {
+        // Bail if setup has not completed.
+        if !self.extra_wgpu_setup_completed {
+            return Ok(());
+        }
+
+        let output_texture = self.wgpu_context().surface().get_current_texture()?;
+        let view = output_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder =
+            self.wgpu_context()
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Command Encoder"),
+                });
+
+        {
+            let rpca = wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(App::BACKGROUND_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+            };
+
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(rpca)],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            render_pass.set_pipeline(self.render_pipeline());
+            render_pass.draw(0..6, 0..1);
+        }
+
+        self.wgpu_context()
+            .queue()
+            .submit(std::iter::once(encoder.finish()));
+        output_texture.present();
+
+        Ok(())
+    }
+
+    /// Redraw the window: render a frame and handle any errors.
+    fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // Request a new redraw after this one.
+        self.window().request_redraw();
+        // Bail if setup has not completed.
+        if !self.extra_wgpu_setup_completed {
+            return;
+        }
+
+        // Handle any errors from the render call.
+        use wgpu::SurfaceError::{Lost, OutOfMemory, Outdated, Timeout};
+        match self.render() {
+            Ok(()) => {}
+            Err(Lost) | Err(Outdated) => self.resize(),
+            Err(Timeout) => warn!("Surface timeout"),
+            Err(OutOfMemory) => {
+                log::error!("OutOfMemory");
+                event_loop.exit();
             }
         }
     }
@@ -259,10 +408,11 @@ impl ApplicationHandler for App {
         // setup has been completed.
         self.finish_wgpu_static_setup();
 
-        use WindowEvent::{CloseRequested, Resized};
+        use WindowEvent::{CloseRequested, RedrawRequested, Resized};
         match event {
             CloseRequested => event_loop.exit(),
             Resized(_) => self.resize(),
+            RedrawRequested => self.redraw(event_loop),
             _ => (),
         }
     }

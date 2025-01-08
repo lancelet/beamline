@@ -97,6 +97,11 @@ impl WgpuContext {
     pub fn device(&self) -> &wgpu::Device {
         &self.device
     }
+
+    /// Return a reference to the WGPU Queue.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
 }
 
 /// Result of an async computation to create a [`WgpuContext`].
