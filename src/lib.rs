@@ -72,6 +72,15 @@ struct InstanceOffsets {
     line_count: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Line {
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+}
+
 #[derive(Debug, Default)]
 pub struct App {
     /// The Application's winit window.
@@ -92,6 +101,8 @@ pub struct App {
     instance_layout: Option<wgpu::BindGroupLayout>,
     /// Instance offsets buffer.
     instance_offsets_buffer: Option<wgpu::Buffer>,
+    /// Lines buffer.
+    lines_buffer: Option<wgpu::Buffer>,
 }
 impl App {
     /// Override the application logging level.
@@ -108,8 +119,15 @@ impl App {
         a: 1.0,
     };
 
-    /// Number of instance offsets (ie. number of drawn buckets).
-    const N_INSTANCE_OFFSETS: u64 = (3640 / 16) * (2160 / 16);
+    /// Maximum number of instance offsets (ie. number of drawn buckets).
+    ///
+    /// This sets the size of the buffer containing instance offsets.
+    const MAX_INSTANCE_OFFSETS: u64 = (3640 / 16) * (2160 / 16);
+
+    /// Maximum number of line segments in buckets.
+    ///
+    /// This sets the size of the buffer containing line segments.
+    const MAX_LINES: u64 = App::MAX_INSTANCE_OFFSETS * 4;
 
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
@@ -283,8 +301,18 @@ impl App {
             },
             count: None,
         };
+        let lines_layout_entry = wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let instance_layout_descriptor = wgpu::BindGroupLayoutDescriptor {
-            entries: &[instance_offsets_layout_entry],
+            entries: &[instance_offsets_layout_entry, lines_layout_entry],
             label: Some("Bind Group Layout for Instances"),
         };
         let instance_layout = device.create_bind_group_layout(&instance_layout_descriptor);
@@ -369,7 +397,7 @@ impl App {
 
     /// Create the instance offsets buffer.
     fn create_instance_offsets_buffer(&mut self) {
-        let buffer_size_bytes = (App::N_INSTANCE_OFFSETS as wgpu::BufferAddress)
+        let buffer_size_bytes = (App::MAX_INSTANCE_OFFSETS as wgpu::BufferAddress)
             * (std::mem::size_of::<InstanceOffsets>() as wgpu::BufferAddress);
         let device = self.wgpu_context().device();
         let buffer_descriptor = wgpu::BufferDescriptor {
@@ -385,6 +413,26 @@ impl App {
     /// Return the instance offsets buffer.
     fn instance_offsets_buffer(&self) -> &wgpu::Buffer {
         self.instance_offsets_buffer.as_ref().unwrap()
+    }
+
+    /// Create the lines buffer.
+    fn create_lines_buffer(&mut self) {
+        let buffer_size_bytes = (App::MAX_LINES as wgpu::BufferAddress)
+            * (std::mem::size_of::<Line>() as wgpu::BufferAddress);
+        let device = self.wgpu_context().device();
+        let buffer_descriptor = wgpu::BufferDescriptor {
+            label: Some("Lines Buffer"),
+            size: buffer_size_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        };
+        let lines_buffer = device.create_buffer(&buffer_descriptor);
+        self.lines_buffer = Some(lines_buffer);
+    }
+
+    /// Return the lines buffer.
+    fn lines_buffer(&self) -> &wgpu::Buffer {
+        self.lines_buffer.as_ref().unwrap()
     }
 
     /// Return the layout of the camera bind group.
@@ -430,6 +478,7 @@ impl App {
                 self.create_render_pipeline();
                 self.create_camera_buffer();
                 self.create_instance_offsets_buffer();
+                self.create_lines_buffer();
                 self.extra_wgpu_setup_completed = true;
                 self.resize();
             } else {
@@ -483,6 +532,9 @@ impl App {
             bytemuck::cast_slice(&instance_offsets),
         );
 
+        // Set up the lines buffer.
+        // TODO
+
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: self.camera_bind_group_layout(),
             entries: &[wgpu::BindGroupEntry {
@@ -494,10 +546,16 @@ impl App {
 
         let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: self.instance_layout(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.instance_offsets_buffer().as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.instance_offsets_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.lines_buffer().as_entire_binding(),
+                },
+            ],
             label: Some("Instance Bind Group"),
         });
 

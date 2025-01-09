@@ -16,8 +16,19 @@ struct InstanceOffsets {
 @group(1) @binding(0)
 var<storage, read> instance_offsets: array<InstanceOffsets>;
 
+struct Line {
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y2: f32
+};
+@group(1) @binding(1)
+var<storage, read> lines: array<Line>;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
+    @interpolate(flat) @location(0) line_start_index: u32,
+    @interpolate(flat) @location(1) line_count: u32
 };
 
 const coords: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
@@ -54,6 +65,8 @@ fn vs_main(
     var y_clip = m_y * y_px + c_y;
 
     out.clip_position = vec4<f32>(x_clip, y_clip, 0.0, 1.0);
+    out.line_start_index = iofs.line_start_index;
+    out.line_count = iofs.line_count;
     return out;
 }
 
