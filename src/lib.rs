@@ -1,4 +1,6 @@
 #[allow(unused)] // TODO: For development.
+mod bucketer;
+#[allow(unused)] // TODO: For development.
 mod wgpu_context;
 
 use cfg_if::cfg_if;
@@ -33,8 +35,7 @@ pub fn run() {
 /// event loop and runs the `App` with it.
 fn run_app() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::builder().build()?;
-    //event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.set_control_flow(ControlFlow::Poll);
 
     // The application is launched two different ways for WASM32 and native.
     cfg_if! {
@@ -80,6 +81,11 @@ struct Line {
     x1: f32,
     y1: f32,
 }
+impl Line {
+    fn new(x0: f32, y0: f32, x1: f32, y1: f32) -> Line {
+        Line { x0, y0, x1, y1 }
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -109,7 +115,7 @@ impl App {
     ///
     /// Set this to override the logging level for both **WASM32** and
     /// **Native** applications.
-    const LOG_LEVEL_FILTER: Option<LevelFilter> = Some(LevelFilter::Trace);
+    const LOG_LEVEL_FILTER: Option<LevelFilter> = Some(LevelFilter::Info);
 
     /// Background color.
     const BACKGROUND_COLOR: wgpu::Color = wgpu::Color {
@@ -243,7 +249,7 @@ impl App {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -501,6 +507,7 @@ impl App {
         let ctx = self.wgpu_context();
         let device = ctx.device();
 
+        // get_current_texture will block when in FIFO present mode.
         let output_texture = ctx.surface().get_current_texture()?;
         let view = output_texture
             .texture
@@ -595,8 +602,6 @@ impl App {
 
     /// Redraw the window: render a frame and handle any errors.
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
-        // Request a new redraw after this one.
-        self.window().request_redraw();
         // Bail if setup has not completed.
         if !self.extra_wgpu_setup_completed {
             return;
@@ -613,6 +618,9 @@ impl App {
                 event_loop.exit();
             }
         }
+
+        // Request a new redraw after this one.
+        self.window().request_redraw();
     }
 }
 
@@ -649,7 +657,9 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         // Finish any WGPU static setup. This just bails immediately if the
         // setup has been completed.
-        self.finish_wgpu_static_setup();
+        if !self.extra_wgpu_setup_completed {
+            self.finish_wgpu_static_setup();
+        }
 
         use WindowEvent::{CloseRequested, RedrawRequested, Resized};
         match event {
