@@ -1,7 +1,6 @@
 #[allow(unused)] // TODO: For development.
 mod wgpu_context;
 
-use bytemuck::bytes_of;
 use cfg_if::cfg_if;
 use log::{trace, warn, LevelFilter};
 use std::sync::Arc;
@@ -64,6 +63,15 @@ struct CameraUniform {
     bucket_height: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct InstanceOffsets {
+    tile_x: u32,
+    tile_y: u32,
+    line_start_index: u32,
+    line_count: u32,
+}
+
 #[derive(Debug, Default)]
 pub struct App {
     /// The Application's winit window.
@@ -80,6 +88,10 @@ pub struct App {
     camera_bind_group_layout: Option<wgpu::BindGroupLayout>,
     /// Camera uniform buffer.
     camera_buffer: Option<wgpu::Buffer>,
+    /// Layout for the instance offsets bind group.
+    instance_layout: Option<wgpu::BindGroupLayout>,
+    /// Instance offsets buffer.
+    instance_offsets_buffer: Option<wgpu::Buffer>,
 }
 impl App {
     /// Override the application logging level.
@@ -96,6 +108,9 @@ impl App {
         a: 1.0,
     };
 
+    /// Number of instance offsets (ie. number of drawn buckets).
+    const N_INSTANCE_OFFSETS: u64 = (3640 / 16) * (2160 / 16);
+
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             const CANVAS_ID: &str = "linerender-host-canvas";
@@ -103,6 +118,30 @@ impl App {
         } else {
             const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;
         }
+    }
+
+    /// TEMPORARY: Provide some example instance offsets.
+    fn example_instance_offsets() -> Vec<InstanceOffsets> {
+        vec![
+            InstanceOffsets {
+                tile_x: 1,
+                tile_y: 1,
+                line_start_index: 0,
+                line_count: 0,
+            },
+            InstanceOffsets {
+                tile_x: 2,
+                tile_y: 0,
+                line_start_index: 0,
+                line_count: 0,
+            },
+            InstanceOffsets {
+                tile_x: 0,
+                tile_y: 0,
+                line_start_index: 0,
+                line_count: 0,
+            },
+        ]
     }
 
     /// Return a reference to the application window, incrementing its
@@ -215,6 +254,7 @@ impl App {
         let shader_module_descriptor = wgpu::include_wgsl!("shader.wgsl");
         let shader = device.create_shader_module(shader_module_descriptor);
 
+        // Camera bind group
         let camera_layout_entry = wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX,
@@ -232,9 +272,26 @@ impl App {
         let camera_bind_group_layout =
             device.create_bind_group_layout(&camera_bind_group_layout_descriptor);
 
+        // Instance offsets bind group
+        let instance_offsets_layout_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let instance_layout_descriptor = wgpu::BindGroupLayoutDescriptor {
+            entries: &[instance_offsets_layout_entry],
+            label: Some("Bind Group Layout for Instances"),
+        };
+        let instance_layout = device.create_bind_group_layout(&instance_layout_descriptor);
+
         let pipeline_layout_descriptor = wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
+            bind_group_layouts: &[&camera_bind_group_layout, &instance_layout],
             push_constant_ranges: &[],
         };
         let render_pipeline_layout = device.create_pipeline_layout(&pipeline_layout_descriptor);
@@ -283,6 +340,7 @@ impl App {
         let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
 
         self.camera_bind_group_layout = Some(camera_bind_group_layout);
+        self.instance_layout = Some(instance_layout);
         self.render_pipeline = Some(render_pipeline);
     }
 
@@ -309,9 +367,34 @@ impl App {
         self.camera_buffer.as_ref().unwrap()
     }
 
+    /// Create the instance offsets buffer.
+    fn create_instance_offsets_buffer(&mut self) {
+        let buffer_size_bytes = (App::N_INSTANCE_OFFSETS as wgpu::BufferAddress)
+            * (std::mem::size_of::<InstanceOffsets>() as wgpu::BufferAddress);
+        let device = self.wgpu_context().device();
+        let buffer_descriptor = wgpu::BufferDescriptor {
+            label: Some("Instance Offsets Buffer"),
+            size: buffer_size_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        };
+        let instance_offsets_buffer = device.create_buffer(&buffer_descriptor);
+        self.instance_offsets_buffer = Some(instance_offsets_buffer);
+    }
+
+    /// Return the instance offsets buffer.
+    fn instance_offsets_buffer(&self) -> &wgpu::Buffer {
+        self.instance_offsets_buffer.as_ref().unwrap()
+    }
+
     /// Return the layout of the camera bind group.
     fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         self.camera_bind_group_layout.as_ref().unwrap()
+    }
+
+    /// Return the layout of the instance bind group.
+    fn instance_layout(&self) -> &wgpu::BindGroupLayout {
+        self.instance_layout.as_ref().unwrap()
     }
 
     /// Configure the surface post-resize. This sets the size of the surface.
@@ -346,6 +429,7 @@ impl App {
                 self.choose_surface_configuration();
                 self.create_render_pipeline();
                 self.create_camera_buffer();
+                self.create_instance_offsets_buffer();
                 self.extra_wgpu_setup_completed = true;
                 self.resize();
             } else {
@@ -380,6 +464,7 @@ impl App {
                     label: Some("Render Command Encoder"),
                 });
 
+        // Set up the camera buffer.
         let size = self.window().inner_size();
         let camera_uniform = CameraUniform {
             width: size.width,
@@ -388,7 +473,15 @@ impl App {
             bucket_height: 32,
         };
         ctx.queue()
-            .write_buffer(self.camera_buffer(), 0, bytes_of(&camera_uniform));
+            .write_buffer(self.camera_buffer(), 0, bytemuck::bytes_of(&camera_uniform));
+
+        // Set up the instance offsets buffer.
+        let instance_offsets = App::example_instance_offsets();
+        ctx.queue().write_buffer(
+            self.instance_offsets_buffer(),
+            0,
+            bytemuck::cast_slice(&instance_offsets),
+        );
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: self.camera_bind_group_layout(),
@@ -397,6 +490,15 @@ impl App {
                 resource: self.camera_buffer().as_entire_binding(),
             }],
             label: Some("Camera Bind Group"),
+        });
+
+        let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: self.instance_layout(),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.instance_offsets_buffer().as_entire_binding(),
+            }],
+            label: Some("Instance Bind Group"),
         });
 
         {
@@ -419,7 +521,10 @@ impl App {
 
             render_pass.set_pipeline(self.render_pipeline());
             render_pass.set_bind_group(0, &camera_bind_group, &[]);
-            render_pass.draw(0..6, 0..6); // 6 vertices, 6 indices
+            render_pass.set_bind_group(1, &instance_bind_group, &[]);
+
+            let n_instances = instance_offsets.len() as u32;
+            render_pass.draw(0..6, 0..n_instances); // 6 vertices
         }
 
         self.wgpu_context()
