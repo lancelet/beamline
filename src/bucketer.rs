@@ -56,7 +56,7 @@ impl Bucketer {
         let max_x = (self.screen_width as f32 / self.bucket_width as f32).ceil() as u32;
         let max_y = (self.screen_height as f32 / self.bucket_height as f32).ceil() as u32;
 
-        let min_edge = self.bucket_width.min(self.bucket_height) as f32;
+        let min_edge = (self.bucket_width.min(self.bucket_height) as f32) * 2.0;
         for sub_line in line.split(min_edge) {
             let mut intersection = sub_line
                 .bound()
@@ -184,11 +184,12 @@ impl AABB {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuLine {
-    pub x0: f32,    // 4 bytes
-    pub y0: f32,    // 4 bytes
-    pub x1: f32,    // 4 bytes
-    pub y1: f32,    // 4 bytes
-    pub width: f32, // 4 bytes
+    pub x0: f32,         // 4 bytes
+    pub y0: f32,         // 4 bytes
+    pub x1: f32,         // 4 bytes
+    pub y1: f32,         // 4 bytes
+    pub core_width: f32, // 4 bytes
+    pub glow_width: f32, // 4 bytes
 }
 
 #[derive(Debug, Clone)]
@@ -197,8 +198,10 @@ pub struct Line {
     pub start: P2,
     /// End coordinate of the line.
     pub end: P2,
-    /// Width of the line.
-    pub width: f32,
+    /// Core width of the line.
+    pub core_width: f32,
+    /// Width of the glow.
+    pub glow_width: f32,
 }
 impl Line {
     /// Split a line into segments of a given maximum length.
@@ -213,9 +216,7 @@ impl Line {
     pub fn split(&self, length: f32) -> impl Iterator<Item = Line> {
         let v = self.end - self.start;
         let line_len = v.magnitude();
-        // let n_steps = (line_len / length).ceil() as usize;
         let dt = length / line_len;
-        // let dt = (1.0 / (n_steps as f64)) as f32;
         let dv = dt * v;
 
         LineSplitter {
@@ -224,19 +225,24 @@ impl Line {
             t: 0.0,
             dv,
             dt,
-            width: self.width,
+            core_width: self.core_width,
+            glow_width: self.glow_width,
         }
     }
 
     pub fn bound(&self) -> AABB {
+        // Find the max width.
+        let max_width = self.core_width.max(self.glow_width);
+        let half_width = max_width / 2.0;
+
         // Tangent vector.
         let vt = (self.end - self.start).normalize();
         // Tangent vector scaled to half width.
-        let vtt = vt * (self.width / 2.0);
+        let vtt = vt * half_width;
         // Perpendicular vector.
         let vp = V2::new(-vt.y, vt.x);
         // Perpendicular vector scaled to half width;
-        let vpp = vp * (self.width / 2.0);
+        let vpp = vp * half_width;
 
         // Expand both ends of the line to include all points at the corners
         // of the rectangular shape it becomes when the width is included.
@@ -258,7 +264,8 @@ impl Line {
             y0: self.start.y,
             x1: self.end.x,
             y1: self.end.y,
-            width: self.width,
+            core_width: self.core_width,
+            glow_width: self.glow_width,
         }
     }
 }
@@ -280,8 +287,10 @@ pub struct LineSplitter {
     /// Step along the scalar parameter. This is an increment of the line's
     /// parameter that corresponds to a step of `dv` along the line.
     dt: f32,
-    /// Width of the line.
-    width: f32,
+    /// Core width of the line.
+    core_width: f32,
+    /// Glow width of the line.
+    glow_width: f32,
 }
 impl Iterator for LineSplitter {
     type Item = Line;
@@ -292,8 +301,7 @@ impl Iterator for LineSplitter {
         } else {
             let next_t = self.t + self.dt;
             let next_p = if next_t <= 1.0 {
-                // Most of the time we avoid any division, and just increment
-                // along the line by a fixed amount.
+                // In the middle just increment by a fixed amount.
                 self.p + self.dv
             } else {
                 // If we go past the end, use the end coordinate.
@@ -303,7 +311,8 @@ impl Iterator for LineSplitter {
             let line = Line {
                 start: self.p,
                 end: next_p,
-                width: self.width,
+                core_width: self.core_width,
+                glow_width: self.glow_width,
             };
             self.t = next_t;
             self.p = next_p;

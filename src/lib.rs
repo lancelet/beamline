@@ -1,10 +1,12 @@
 #[allow(unused)] // TODO: For development.
 mod bucketer;
+mod frame_timer;
 #[allow(unused)] // TODO: For development.
 mod wgpu_context;
 
 use bucketer::{Bucketer, GpuLine, Line, P2};
 use cfg_if::cfg_if;
+use frame_timer::FrameTimer;
 use log::{trace, warn, LevelFilter};
 use std::sync::Arc;
 use wgpu::{util::DeviceExt, SurfaceConfiguration};
@@ -97,6 +99,8 @@ fn create_lines_and_instance_offsets(bucketer: &Bucketer) -> (Vec<InstanceOffset
 
 #[derive(Debug, Default)]
 pub struct App {
+    /// Frame timer.
+    frame_timer: Option<FrameTimer>,
     /// The Application's winit window.
     window: Option<Arc<Window>>,
     /// WGPU context - has async setup.
@@ -127,14 +131,14 @@ impl App {
 
     /// Background color.
     const BACKGROUND_COLOR: wgpu::Color = wgpu::Color {
-        r: 0.1,
-        g: 0.2,
-        b: 0.3,
+        r: 0.05,
+        g: 0.07,
+        b: 0.09,
         a: 1.0,
     };
 
     /// Size of a rendering bucket.
-    const BUCKET_SIZE: u32 = 64;
+    const BUCKET_SIZE: u32 = 128;
 
     /// Maximum number of instance offsets (ie. number of drawn buckets).
     ///
@@ -164,34 +168,46 @@ impl App {
             App::BUCKET_SIZE,
             App::BUCKET_SIZE,
         );
-        let z = 100.0;
+        let z = 200.0;
         let q = 1200.0;
+        let core_width = width / 20.0;
+        let glow_width = width;
         bucketer.add_line(Line {
             start: P2::new(z, z),
             end: P2::new(z + q, z),
-            width,
+            core_width,
+            glow_width,
         });
         bucketer.add_line(Line {
             start: P2::new(z + q, z),
             end: P2::new(z + q, z + q),
-            width,
+            core_width,
+            glow_width,
         });
         bucketer.add_line(Line {
             start: P2::new(z + q, z + q),
             end: P2::new(z, z + q),
-            width,
+            core_width,
+            glow_width,
         });
         bucketer.add_line(Line {
             start: P2::new(z, z + q),
             end: P2::new(z, z),
-            width,
+            core_width,
+            glow_width,
         });
         bucketer.add_line(Line {
             start: P2::new(z, z),
             end: P2::new(z + q, z + q),
-            width,
+            core_width,
+            glow_width,
         });
         bucketer
+    }
+
+    /// Return a mutable reference to the frame timer.
+    fn frame_timer(&mut self) -> &mut FrameTimer {
+        self.frame_timer.as_mut().unwrap()
     }
 
     /// Return a reference to the application window, incrementing its
@@ -258,7 +274,7 @@ impl App {
         let surface_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
             .unwrap_or({
                 warn!(
@@ -511,6 +527,7 @@ impl App {
                 self.create_camera_buffer();
                 self.create_instance_offsets_buffer();
                 self.create_lines_buffer();
+                self.frame_timer = Some(FrameTimer::new());
                 self.extra_wgpu_setup_completed = true;
                 self.resize();
             } else {
@@ -529,6 +546,10 @@ impl App {
         if !self.extra_wgpu_setup_completed {
             return Ok(());
         }
+
+        // Frame timer
+        let tsec = self.frame_timer().total_time_secs_f64();
+        let millis = self.frame_timer().tick_millis();
 
         let ctx = self.wgpu_context();
         let device = ctx.device();
@@ -557,7 +578,10 @@ impl App {
         ctx.queue()
             .write_buffer(self.camera_buffer(), 0, bytemuck::bytes_of(&camera_uniform));
 
-        let bucketer = App::example_bucketer(size.width, size.height, 32.0);
+        // let line_width = 128.0 * (tsec.sin() + 1.0 + 0.1) as f32;
+        let line_width = 128.0;
+
+        let bucketer = App::example_bucketer(size.width, size.height, line_width);
         let (instance_offsets, lines) = create_lines_and_instance_offsets(&bucketer);
         // Set up the instance offsets buffer.
         ctx.queue().write_buffer(
