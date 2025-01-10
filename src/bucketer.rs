@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use cgmath::{InnerSpace, Point2, Vector2};
 
 /// 2D point type.
-type P2 = Point2<f32>;
+pub type P2 = Point2<f32>;
 /// 2D vector type.
-type V2 = Vector2<f32>;
+pub type V2 = Vector2<f32>;
 
 pub struct Bucketer {
     /// Width of the screen.
@@ -38,7 +38,7 @@ impl Bucketer {
 
     /// Return all the buckets in the `Bucketer` as an iterator of bucket
     /// coordinate to the lines it contains.
-    fn buckets(&self) -> impl Iterator<Item = (&(u32, u32), &Vec<Line>)> {
+    pub fn buckets(&self) -> impl Iterator<Item = (&(u32, u32), &Vec<Line>)> {
         self.buckets.iter()
     }
 
@@ -99,6 +99,7 @@ impl Bucketer {
 }
 
 /// Describes the intersection of an [`AABB`] with a regular grid.
+#[derive(Debug)]
 pub struct GridIntersection {
     min_x: u32,
     max_x: u32,
@@ -125,14 +126,11 @@ impl AABB {
     /// - `None`: if the iterator is empty.
     /// - `Some(_)`: if the iterator contains at least one point.
     pub fn all(mut pts: impl Iterator<Item = P2>) -> Option<AABB> {
-        let mut min: P2 = P2::new(0.0, 0.0);
-        let mut max: P2 = P2::new(0.0, 0.0);
-
         match pts.next() {
             None => None,
             Some(p) => {
-                min = p;
-                max = p;
+                let mut min = p;
+                let mut max = p;
                 for p in pts {
                     if p.x < min.x {
                         min.x = p.x;
@@ -164,10 +162,16 @@ impl AABB {
     /// Intersection rectangle, describing which cells (inclusive) the
     /// axis-aligned bounding box intersects.
     pub fn grid_intersect(&self, cell_size_x: f32, cell_size_y: f32) -> GridIntersection {
+        let min_x = (self.min.x / cell_size_x).max(0.0) as u32;
+        let max_x = (self.max.x / cell_size_x).max(0.0) as u32;
+        let min_y = (self.min.y / cell_size_y).max(0.0) as u32;
+        let max_y = (self.max.y / cell_size_y).max(0.0) as u32;
+        /*
         let min_x = (self.min.x / cell_size_x).floor().max(0.0) as u32;
         let max_x = (self.max.x / cell_size_x).ceil().max(0.0) as u32;
         let min_y = (self.min.y / cell_size_y).floor().max(0.0) as u32;
         let max_y = (self.max.y / cell_size_y).ceil().max(0.0) as u32;
+        */
         GridIntersection {
             min_x,
             max_x,
@@ -177,14 +181,24 @@ impl AABB {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuLine {
+    pub x0: f32,    // 4 bytes
+    pub y0: f32,    // 4 bytes
+    pub x1: f32,    // 4 bytes
+    pub y1: f32,    // 4 bytes
+    pub width: f32, // 4 bytes
+}
+
 #[derive(Debug, Clone)]
 pub struct Line {
     /// Start coordinate of the line.
-    start: P2,
+    pub start: P2,
     /// End coordinate of the line.
-    end: P2,
+    pub end: P2,
     /// Width of the line.
-    width: f32,
+    pub width: f32,
 }
 impl Line {
     /// Split a line into segments of a given maximum length.
@@ -199,12 +213,14 @@ impl Line {
     pub fn split(&self, length: f32) -> impl Iterator<Item = Line> {
         let v = self.end - self.start;
         let line_len = v.magnitude();
-        let n_steps = (line_len / length).ceil() as usize;
-        let dt = (1.0 / (n_steps as f64)) as f32;
-        let dv = v / dt;
+        // let n_steps = (line_len / length).ceil() as usize;
+        let dt = length / line_len;
+        // let dt = (1.0 / (n_steps as f64)) as f32;
+        let dv = dt * v;
 
         LineSplitter {
             p: self.start,
+            end: self.end,
             t: 0.0,
             dv,
             dt,
@@ -215,8 +231,10 @@ impl Line {
     pub fn bound(&self) -> AABB {
         // Tangent vector.
         let vt = (self.end - self.start).normalize();
+        // Tangent vector scaled to half width.
+        let vtt = vt * (self.width / 2.0);
         // Perpendicular vector.
-        let vp = V2::new(vt.y, vt.x);
+        let vp = V2::new(-vt.y, vt.x);
         // Perpendicular vector scaled to half width;
         let vpp = vp * (self.width / 2.0);
 
@@ -224,14 +242,24 @@ impl Line {
         // of the rectangular shape it becomes when the width is included.
         AABB::all(
             vec![
-                self.start + vpp,
-                self.start - vpp,
-                self.end + vpp,
-                self.end - vpp,
+                self.start - vtt + vpp,
+                self.start - vtt - vpp,
+                self.end + vtt + vpp,
+                self.end + vtt - vpp,
             ]
             .into_iter(),
         )
         .unwrap()
+    }
+
+    pub fn to_gpu_line(&self) -> GpuLine {
+        GpuLine {
+            x0: self.start.x,
+            y0: self.start.y,
+            x1: self.end.x,
+            y1: self.end.y,
+            width: self.width,
+        }
     }
 }
 
@@ -241,6 +269,8 @@ impl Line {
 pub struct LineSplitter {
     /// Current point.
     p: P2,
+    /// End of the line.
+    end: P2,
     /// Current parameter value in the range `[0.0, 1.0]`.
     t: f32,
     /// Vector step along the line direction. This is a vector along the
@@ -266,10 +296,8 @@ impl Iterator for LineSplitter {
                 // along the line by a fixed amount.
                 self.p + self.dv
             } else {
-                // Division may be required in the last segment to avoid going
-                // past the end.
-                let frac = (1.0 - self.t) / (next_t - 1.0);
-                self.p + frac * self.dv
+                // If we go past the end, use the end coordinate.
+                self.end
             };
 
             let line = Line {

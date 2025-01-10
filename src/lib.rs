@@ -3,6 +3,7 @@ mod bucketer;
 #[allow(unused)] // TODO: For development.
 mod wgpu_context;
 
+use bucketer::{Bucketer, GpuLine, Line, P2};
 use cfg_if::cfg_if;
 use log::{trace, warn, LevelFilter};
 use std::sync::Arc;
@@ -36,6 +37,7 @@ pub fn run() {
 fn run_app() -> Result<(), EventLoopError> {
     let event_loop = EventLoop::builder().build()?;
     event_loop.set_control_flow(ControlFlow::Poll);
+    // event_loop.set_control_flow(ControlFlow::Wait);
 
     // The application is launched two different ways for WASM32 and native.
     cfg_if! {
@@ -73,18 +75,24 @@ struct InstanceOffsets {
     line_count: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct Line {
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-}
-impl Line {
-    fn new(x0: f32, y0: f32, x1: f32, y1: f32) -> Line {
-        Line { x0, y0, x1, y1 }
+fn create_lines_and_instance_offsets(bucketer: &Bucketer) -> (Vec<InstanceOffsets>, Vec<GpuLine>) {
+    let mut cur_line_start_index: u32 = 0;
+    let mut instance_offsets_vec: Vec<InstanceOffsets> = Vec::new();
+    let mut line_vec: Vec<GpuLine> = Vec::new();
+    for ((tile_x, tile_y), bucket_lines) in bucketer.buckets() {
+        let instance_offsets = InstanceOffsets {
+            tile_x: *tile_x,
+            tile_y: *tile_y,
+            line_start_index: cur_line_start_index,
+            line_count: bucket_lines.len() as u32,
+        };
+        cur_line_start_index += bucket_lines.len() as u32;
+        let mut gpu_lines: Vec<GpuLine> =
+            bucket_lines.iter().map(|line| line.to_gpu_line()).collect();
+        instance_offsets_vec.push(instance_offsets);
+        line_vec.append(&mut gpu_lines);
     }
+    (instance_offsets_vec, line_vec)
 }
 
 #[derive(Debug, Default)]
@@ -115,7 +123,7 @@ impl App {
     ///
     /// Set this to override the logging level for both **WASM32** and
     /// **Native** applications.
-    const LOG_LEVEL_FILTER: Option<LevelFilter> = Some(LevelFilter::Info);
+    const LOG_LEVEL_FILTER: Option<LevelFilter> = None; // Some(LevelFilter::Debug);
 
     /// Background color.
     const BACKGROUND_COLOR: wgpu::Color = wgpu::Color {
@@ -125,10 +133,14 @@ impl App {
         a: 1.0,
     };
 
+    /// Size of a rendering bucket.
+    const BUCKET_SIZE: u32 = 64;
+
     /// Maximum number of instance offsets (ie. number of drawn buckets).
     ///
     /// This sets the size of the buffer containing instance offsets.
-    const MAX_INSTANCE_OFFSETS: u64 = (3640 / 16) * (2160 / 16);
+    const MAX_INSTANCE_OFFSETS: u64 =
+        (3640 / App::BUCKET_SIZE as u64) * (2160 / App::BUCKET_SIZE as u64);
 
     /// Maximum number of line segments in buckets.
     ///
@@ -144,28 +156,42 @@ impl App {
         }
     }
 
-    /// TEMPORARY: Provide some example instance offsets.
-    fn example_instance_offsets() -> Vec<InstanceOffsets> {
-        vec![
-            InstanceOffsets {
-                tile_x: 1,
-                tile_y: 1,
-                line_start_index: 0,
-                line_count: 0,
-            },
-            InstanceOffsets {
-                tile_x: 2,
-                tile_y: 0,
-                line_start_index: 0,
-                line_count: 0,
-            },
-            InstanceOffsets {
-                tile_x: 0,
-                tile_y: 0,
-                line_start_index: 0,
-                line_count: 0,
-            },
-        ]
+    /// TEMPORARY: Bucketed lines.
+    fn example_bucketer(screen_width: u32, screen_height: u32, width: f32) -> Bucketer {
+        let mut bucketer = Bucketer::new(
+            screen_width,
+            screen_height,
+            App::BUCKET_SIZE,
+            App::BUCKET_SIZE,
+        );
+        let z = 100.0;
+        let q = 1200.0;
+        bucketer.add_line(Line {
+            start: P2::new(z, z),
+            end: P2::new(z + q, z),
+            width,
+        });
+        bucketer.add_line(Line {
+            start: P2::new(z + q, z),
+            end: P2::new(z + q, z + q),
+            width,
+        });
+        bucketer.add_line(Line {
+            start: P2::new(z + q, z + q),
+            end: P2::new(z, z + q),
+            width,
+        });
+        bucketer.add_line(Line {
+            start: P2::new(z, z + q),
+            end: P2::new(z, z),
+            width,
+        });
+        bucketer.add_line(Line {
+            start: P2::new(z, z),
+            end: P2::new(z + q, z + q),
+            width,
+        });
+        bucketer
     }
 
     /// Return a reference to the application window, incrementing its
@@ -281,7 +307,7 @@ impl App {
         // Camera bind group
         let camera_layout_entry = wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -337,7 +363,7 @@ impl App {
         };
         let color_target_state = wgpu::ColorTargetState {
             format: self.surface_configuration().format,
-            blend: Some(wgpu::BlendState::REPLACE),
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write_mask: wgpu::ColorWrites::ALL,
         };
         let fragment_state = wgpu::FragmentState {
@@ -424,7 +450,7 @@ impl App {
     /// Create the lines buffer.
     fn create_lines_buffer(&mut self) {
         let buffer_size_bytes = (App::MAX_LINES as wgpu::BufferAddress)
-            * (std::mem::size_of::<Line>() as wgpu::BufferAddress);
+            * (std::mem::size_of::<GpuLine>() as wgpu::BufferAddress);
         let device = self.wgpu_context().device();
         let buffer_descriptor = wgpu::BufferDescriptor {
             label: Some("Lines Buffer"),
@@ -498,7 +524,7 @@ impl App {
     }
 
     /// Render a single frame.
-    fn render(&self) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // Bail if setup has not completed.
         if !self.extra_wgpu_setup_completed {
             return Ok(());
@@ -525,22 +551,23 @@ impl App {
         let camera_uniform = CameraUniform {
             width: size.width,
             height: size.height,
-            bucket_width: 32,
-            bucket_height: 32,
+            bucket_width: App::BUCKET_SIZE,
+            bucket_height: App::BUCKET_SIZE,
         };
         ctx.queue()
             .write_buffer(self.camera_buffer(), 0, bytemuck::bytes_of(&camera_uniform));
 
+        let bucketer = App::example_bucketer(size.width, size.height, 32.0);
+        let (instance_offsets, lines) = create_lines_and_instance_offsets(&bucketer);
         // Set up the instance offsets buffer.
-        let instance_offsets = App::example_instance_offsets();
         ctx.queue().write_buffer(
             self.instance_offsets_buffer(),
             0,
             bytemuck::cast_slice(&instance_offsets),
         );
-
         // Set up the lines buffer.
-        // TODO
+        ctx.queue()
+            .write_buffer(self.lines_buffer(), 0, bytemuck::cast_slice(&lines));
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: self.camera_bind_group_layout(),
