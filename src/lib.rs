@@ -1,4 +1,6 @@
 #[allow(unused)] // TODO: For development.
+pub mod beamline;
+#[allow(unused)] // TODO: For development.
 mod bucketer;
 mod frame_timer;
 #[allow(unused)] // TODO: For development.
