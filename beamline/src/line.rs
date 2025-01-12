@@ -1,9 +1,9 @@
-use super::types::P2;
-use super::types::V2;
-use crate::beamline::compare::close;
-use crate::beamline::compare::close_default_tol;
-use crate::beamline::compare::CloseCmp;
-use crate::beamline::compare::Tol;
+use crate::P2;
+use crate::V2;
+use crate::compare::close;
+use crate::compare::close_default_tol;
+use crate::compare::CloseCmp;
+use crate::compare::Tol;
 
 /// Line.
 ///

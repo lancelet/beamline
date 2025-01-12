@@ -81,7 +81,7 @@ impl Polygon {
 ///
 /// - `true` if at least two points lie within `min_dist` of each other
 /// - `false` if there are no coincident points
-fn points_coincident<'a>(min_dist: f32, mut points: impl Iterator<Item = &'a P2>) -> bool {
+fn points_coincident<'a>(min_dist: f32, points: impl Iterator<Item = &'a P2>) -> bool {
     let mut kd_tree: KdTree<f32, 2> = KdTree::new();
 
     // Check points against the tree.

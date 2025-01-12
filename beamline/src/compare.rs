@@ -38,7 +38,8 @@ where
     }
 
     pub fn scale(&self, factor: S) -> Tol<S>
-    where S: Mul<Output = S> + Copy
+    where
+        S: Mul<Output = S> + Copy,
     {
         use Tol::{Abs, AbsRel, Rel};
         match self {
@@ -260,7 +261,7 @@ where
 #[macro_export]
 macro_rules! assert_close {
     ($tol:expr, $a: expr, $b: expr) => {
-        if (!crate::beamline::compare::close($tol, &$a, &$b)) {
+        if (!crate::compare::close($tol, &$a, &$b)) {
             panic!(
                 "assertion failed: `(left ≈ right)`
   left:  `{:?}`
@@ -271,7 +272,7 @@ macro_rules! assert_close {
         }
     };
     ($a: expr, $b: expr) => {
-        if (!crate::beamline::compare::close_default_tol(&$a, &$b)) {
+        if (!crate::compare::close_default_tol(&$a, &$b)) {
             panic!(
                 "assertion failed: `(left ≈ right)`
   left:  `{:?}`

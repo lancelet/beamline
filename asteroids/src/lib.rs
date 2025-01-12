@@ -1,6 +1,4 @@
 #[allow(unused)] // TODO: For development.
-pub mod beamline;
-#[allow(unused)] // TODO: For development.
 mod bucketer;
 mod frame_timer;
 #[allow(unused)] // TODO: For development.
@@ -550,8 +548,8 @@ impl App {
         }
 
         // Frame timer
-        let tsec = self.frame_timer().total_time_secs_f64();
-        let millis = self.frame_timer().tick_millis();
+        let _tsec = self.frame_timer().total_time_secs_f64();
+        let _millis = self.frame_timer().tick_millis();
 
         let ctx = self.wgpu_context();
         let device = ctx.device();
