@@ -1,9 +1,14 @@
 use super::types::P2;
 use super::types::V2;
+use crate::beamline::compare::close;
+use crate::beamline::compare::close_default_tol;
+use crate::beamline::compare::CloseCmp;
+use crate::beamline::compare::Tol;
 
 /// Line.
 ///
 /// To construct a line, use [`Line::new`].
+#[derive(Debug)]
 pub struct Line {
     /// End point of the line.
     a: P2,
@@ -12,6 +17,9 @@ pub struct Line {
 }
 impl Line {
     /// Create a new line from two points.
+    ///
+    /// The points must not (approximately) lie on top of each other, otherwise
+    /// a degenerate line is produced.
     ///
     /// # Parameters
     ///
@@ -22,6 +30,10 @@ impl Line {
     ///
     /// A new line.
     pub fn new(a: P2, b: P2) -> Line {
+        assert!(
+            !close_default_tol(&a, &b),
+            "Degenerate line: points are too close: ({:?}, {:?})", a, b
+        );
         Line { a, b }
     }
 
@@ -65,42 +77,187 @@ impl Line {
         let v1 = self.ab_vec();
         let v2 = line.ab_vec();
 
-        let v2yx = v2.y / v2.x;
-        let t1 = ((line.a.y - self.a.y) + v2yx * (self.a.x - line.a.x)) / (v1.y - v1.x * v2yx);
-        if t1 < 0.0 || t1 > 1.0 {
-            return None;
-        }
-        let t2 = (self.a.x - line.a.x + t1 * v1.x) / v2.x;
-        if t2 < 0.0 || t2 > 1.0 {
+        let det = -v1.x * v2.y + v2.x * v1.y;
+        let c = 1.0 / det;
+        if c.is_nan() {
             return None;
         }
 
-        Some(self.eval_param(t1))
+        let dx = line.a.x - self.a.x;
+        let dy = line.a.y - self.a.y;
+
+        let t1 = c * (-v2.y * dx + v2.x * dy);
+        let t2 = c * (-v1.y * dx + v1.x * dy);
+
+        if (0.0 <= t1) && (t1 <= 1.0) && (0.0 <= t2) && (t2 <= 1.0) {
+            Some(self.eval_param(t1))
+        } else {
+            None
+        }
+    }
+}
+
+impl CloseCmp for Line {
+    type Scalar = f32;
+    /// Lines are considered close in a way that ignores the ordering of the
+    /// two ends.
+    fn close(tol: Tol<Self::Scalar>, a: &Self, b: &Self) -> bool {
+        (close(tol, &a.a, &b.a) && close(tol, &a.b, &b.b))
+            || (close(tol, &a.a, &b.b) && close(tol, &a.b, &b.a))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::InnerSpace;
+    use proptest::prelude::*;
 
-    /// Test intersecting two lines where an intersection is known to exist.
-    #[test]
-    fn test_line_intersection_exists() {
-        let line1 = Line::new(P2::new(0.0, 1.0), P2::new(6.0, 5.0));
-        let line2 = Line::new(P2::new(2.0, 6.0), P2::new(4.0, 0.0));
-
-        let intersection = line1.intersection(&line2);
-        let expected = P2::new(3.0, 3.0);
-        assert_close!(intersection, Some(expected));
+    /// Construct a line from components.
+    /// Used in testing for succinctness.
+    fn lc(ax: f32, ay: f32, bx: f32, by: f32) -> Line {
+        let a = P2::new(ax, ay);
+        let b = P2::new(bx, by);
+        Line::new(a, b)
     }
 
-    /// Test intersecting two lines where there is no intersection.
-    #[test]
-    fn test_line_intersection_does_not_exist() {
-        let line1 = Line::new(P2::new(2.0, 0.0), P2::new(0.0, 6.0));
-        let line2 = Line::new(P2::new(2.0, 6.0), P2::new(4.0, 0.0));
+    /// Assert than a line intersection exists.
+    fn intersection_exists(line1: Line, line2: Line, ix: f32, iy: f32) {
+        let expected = P2::new(ix, iy);
+        let p_intersect = line1.intersection(&line2);
+        assert_close!(p_intersect, Some(expected));
+    }
 
-        let intersection = line1.intersection(&line2);
-        assert_eq!(intersection, None);
+    /// Assert that no line intersection exists.
+    fn no_intersection_exists(line1: Line, line2: Line) {
+        let p_intersect = line1.intersection(&line2);
+        assert_eq!(p_intersect, None);
+    }
+
+    /// Test intersecting pairs of lines where an intersection is known to
+    /// exist.
+    #[test]
+    fn test_line_intersections_exist() {
+        intersection_exists(lc(0.0, 1.0, 6.0, 5.0), lc(2.0, 6.0, 4.0, 0.0), 3.0, 3.0);
+        intersection_exists(lc(1.0, 0.0, 0.0, 0.0), lc(0.0, 0.0, 0.0, -1.0), 0.0, 0.0);
+        intersection_exists(lc(0.0, 1.0, 0.0, -1.0), lc(-1.0, 0.0, 0.0, 0.0), 0.0, 0.0);
+        intersection_exists(lc(0.0, 26774.988, 0.0, -50091.824), lc(-48912.94, 0.0, 0.0, 0.0), 0.0, 0.0);
+    }
+
+    /// Test intersecting pairs of lines where there is no intersection.
+    #[test]
+    fn test_line_intersection_does_not_exist_1() {
+        no_intersection_exists(lc(2.0, 0.0, 0.0, 6.0), lc(2.0, 6.0, 4.0, 0.0));
+        no_intersection_exists(lc(1.0, 0.0, 1.0, 1.0), lc(0.0, 1.0, 0.0, 0.0));
+    }
+
+    /// Intersecting pair of lines.
+    ///
+    /// This should be constructed such that the lines are intersecting.
+    #[derive(Debug)]
+    struct IntersectingLinePair {
+        intersection: P2,
+        line1: Line,
+        line2: Line,
+    }
+    impl IntersectingLinePair {
+        /// Construct a new intersecting line pair.
+        ///
+        /// # Parameters
+        ///
+        /// - `intersection`: the guaranteed point of intersection
+        /// - `v1`: vector along the direction of the first line
+        /// - `c11`: positive value scaling `v1` from the point of intersection
+        /// - `c12`: positive value scaling `v1` from the point of intersection
+        /// - `c21`: positive value scaling `v2` from the point of intersection
+        /// - `c22`: positive value scaling `v2` from the point of intersection
+        fn new(intersection: P2, v1: V2, c11: f32, c12: f32, v2: V2, c21: f32, c22: f32) -> Option<Self> {
+            const MAG2_LIMIT: f32 = 0.2;       // Min v1, v2 length.
+            const PARALLEL_LIMIT: f32 = 0.95;  // Limit of |dot(|v1|, |v2|)|.
+            const MIN_LEN: f32 = 0.2;          // Min line length.
+            const MIN_OFS: f32 = 0.01;         // Min cij length.
+
+            // Check that offset lengths are OK.
+            if c11 < MIN_OFS || c12 < MIN_OFS || c21 < MIN_OFS || c22 < MIN_OFS {
+                return None;
+            }
+
+            // Check that the two vectors are non-zero length.
+            if v1.magnitude2() < MAG2_LIMIT || v2.magnitude2() < MAG2_LIMIT {
+                return None;
+            }
+
+            let v1n = v1.normalize();
+            let v2n = v2.normalize();
+            // Check that the two vectors are not parallel.
+            if v1n.dot(v2n).abs() > PARALLEL_LIMIT {
+                return None;
+            }
+
+            let a1 = intersection - c11 * v1n;
+            let b1 = intersection + c12 * v1n;
+            // Check that line1 points are not coincident.
+            if (a1 - b1).magnitude() < MIN_LEN {
+                return None;
+            }
+
+            let a2 = intersection - c21 * v2n;
+            let b2 = intersection + c22 * v2n;
+            // Check that line2 points are not coincident.
+            if (a2 - b2).magnitude() < MIN_LEN {
+                return None;
+            }
+
+            let line1 = Line::new(a1, b1);
+            let line2 = Line::new(a2, b2);
+
+            Some(IntersectingLinePair {
+                intersection,
+                line1,
+                line2,
+            })
+        }
+    }
+    impl Arbitrary for IntersectingLinePair {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+        fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+            let r: f32 = 10.0;
+            let s = 0.0..r;
+            let q = -r..=r;
+            let c = 0.01..r;
+            (
+                q.clone(), // ix
+                q.clone(), // iy
+                q.clone(), // v1x
+                q.clone(), // v1y
+                c.clone(), // c11
+                c.clone(), // c12
+                q.clone(), // v2x
+                q.clone(), // v2y
+                c.clone(), // c21
+                c.clone(), // c22
+            )
+                .prop_filter_map(
+                    "avoid degenerate cases",
+                    |(ix, iy, v1x, v1y, c11, c12, v2x, v2y, c21, c22)| {
+                        let px = P2::new(ix, iy);
+                        let v1 = V2::new(v1x, v1y);
+                        let v2 = V2::new(v2x, v2y);
+
+                        IntersectingLinePair::new(px, v1, c11, c12, v2, c21, c22)
+                    },
+                )
+                .boxed()
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_intersecting_lines_intersect(ilp: IntersectingLinePair) {
+            let tol = Tol::default().scale(1e2);
+            let opt_intersection = ilp.line1.intersection(&ilp.line2);
+            assert_close!(tol, opt_intersection, Some(ilp.intersection));
+        }
     }
 }
