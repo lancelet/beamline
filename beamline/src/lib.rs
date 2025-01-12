@@ -1,5 +1,5 @@
 #[macro_use]
-mod compare;
+pub mod compare;
 mod line;
 mod polygon;
 mod types;

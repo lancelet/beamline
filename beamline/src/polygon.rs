@@ -1,8 +1,8 @@
 //! 2D polygons.
 
-use kiddo::{KdTree, SquaredEuclidean};
-
 use super::{types::P2, Line};
+use crate::V2;
+use kiddo::{KdTree, SquaredEuclidean};
 
 /// Closed polygon.
 ///
@@ -60,10 +60,101 @@ impl Polygon {
     pub fn is_simple(&self, min_dist: f32) -> bool {
         let pt_test = points_coincident(min_dist, self.points.iter());
         let edge_test = non_adjacent_edges_intersect(&self);
-        dbg!(pt_test);
-        dbg!(edge_test);
-
         !(pt_test || edge_test)
+    }
+
+    /// Return the winding direction at a vertex.
+    ///
+    /// See [`WindingDirection`] for how the direction is defined.
+    ///
+    /// # Parameters
+    ///
+    /// - `vertex`: index of the vertex for which to compute the winding
+    ///   direction.
+    ///
+    /// # Returns
+    ///
+    /// - `None`: if the points are approximately collinear, and no winding
+    ///   direction is defined.
+    /// - `Some(direction)`: if the winding direction is defined.
+    pub fn winding_direction(&self, vertex: usize) -> Option<WindingDirection> {
+        let n = self.points.len();
+        assert!(vertex < n);
+
+        // Find indices of the previous, current and next vertices. The
+        // previous and next indices wrap around the polygon ends.
+        let i_prev = if vertex == 0 { n - 1 } else { vertex - 1 };
+        let i_curr = vertex;
+        let i_next = (vertex + 1) % n;
+
+        // Previous point, current point and next point.
+        let p0 = self.points[i_prev];
+        let p1 = self.points[i_curr];
+        let p2 = self.points[i_next];
+
+        // Compute vectors along the edges.
+        let a = p1 - p0;
+        let b = p2 - p1;
+
+        // Compute 2D cross product.
+        let cross = cross_product(&a, &b);
+
+        // Ignore nearly-zero values, since they are approximately collinear.
+        if cross.abs() < f32::EPSILON {
+            None
+        } else {
+            let dir = if cross > 0.0 {
+                WindingDirection::Anticlockwise
+            } else {
+                WindingDirection::Clockwise
+            };
+            Some(dir)
+        }
+    }
+
+    /// Check if this `Polygon` is convex.
+    ///
+    /// A convex polygon has all angles turning in the same direction.
+    pub fn is_convex(&self) -> bool {
+        assert!(
+            self.is_simple(f32::EPSILON),
+            "Polygon is non-simple, so convexity is not defined."
+        );
+        all_equal((0..self.points.len()).filter_map(|vertex| self.winding_direction(vertex)))
+    }
+}
+
+/// Winding direction.
+///
+/// Each vertex in the polygon has a winding direction. This is defined as
+/// follows:
+///
+/// 1. Let `i` be the vertex of intered.
+/// 2. Define `a` to be the vector from the previous vertex to the current
+///    vertex: `a = points[i] - points[i-1]`
+/// 3. Define `b` to be the vector from the current vertex to the next
+///    vertex: `b = points[i+1] - points[i]`.
+///
+/// The rotation FROM `a` to get to `b` is either `Clockwise` or
+/// `Anticlockwise`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindingDirection {
+    /// Clockwise winding at the current vertex.
+    Clockwise,
+    /// Anticlockwise winding at the current vertex.
+    Anticlockwise,
+}
+
+/// Return the 2D cross product: `a x b`.
+fn cross_product(a: &V2, b: &V2) -> f32 {
+    a.x * b.y - a.y * b.x
+}
+
+/// Check if all items in an iterator are equal.
+fn all_equal<A: PartialEq>(mut iter: impl Iterator<Item = A>) -> bool {
+    match iter.next() {
+        None => true,
+        Some(reference_item) => iter.all(|item| item == reference_item),
     }
 }
 
@@ -127,28 +218,36 @@ fn non_adjacent_edges_intersect(polygon: &Polygon) -> bool {
 mod tests {
     use super::*;
 
-    /// A square should be a simple polygon.
-    #[test]
-    fn test_square_is_simple_polygon() {
-        let square = Polygon::new(vec![
+    /// A square polygon.
+    fn square() -> Polygon {
+        Polygon::new(vec![
             P2::new(0.0, 0.0),
             P2::new(1.0, 0.0),
             P2::new(1.0, 1.0),
             P2::new(0.0, 1.0),
-        ]);
-        assert!(square.is_simple(1e-3))
+        ])
+    }
+
+    /// A "bowtie" polygon.
+    fn bowtie() -> Polygon {
+        Polygon::new(vec![
+            P2::new(0.0, 0.0),
+            P2::new(1.0, 0.0),
+            P2::new(0.0, 1.0),
+            P2::new(1.0, 1.0),
+        ])
+    }
+
+    /// A square should be a simple polygon.
+    #[test]
+    fn test_square_is_simple_polygon() {
+        assert!(square().is_simple(1e-3))
     }
 
     // A "bowtie" should not be a simple polygon.
     #[test]
     fn test_bowtie_is_not_simple_polygon() {
-        let bowtie = Polygon::new(vec![
-            P2::new(0.0, 0.0),
-            P2::new(1.0, 0.0),
-            P2::new(0.0, 1.0),
-            P2::new(1.0, 1.0),
-        ]);
-        assert!(!bowtie.is_simple(1e-3))
+        assert!(!bowtie().is_simple(1e-3))
     }
 
     // A polygon with coincident points should not be a simple polygon.
@@ -161,5 +260,24 @@ mod tests {
             P2::new(0.0001, 0.0),
         ]);
         assert!(!coincident.is_simple(1e-3))
+    }
+
+    // A square should be convex.
+    #[test]
+    fn test_square_is_convex() {
+        assert!(square().is_convex())
+    }
+
+    // A non-convex polygon should be non-convex.
+    #[test]
+    fn test_non_convex_is_not_convex() {
+        let non_convex = Polygon::new(vec![
+            P2::new(0.0, 0.0),
+            P2::new(1.0, 0.0),
+            P2::new(1.0, 1.0),
+            P2::new(0.5, 0.7),
+            P2::new(0.0, 1.0),
+        ]);
+        assert!(!non_convex.is_convex())
     }
 }

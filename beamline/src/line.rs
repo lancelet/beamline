@@ -1,9 +1,9 @@
-use crate::P2;
-use crate::V2;
 use crate::compare::close;
 use crate::compare::close_default_tol;
 use crate::compare::CloseCmp;
 use crate::compare::Tol;
+use crate::P2;
+use crate::V2;
 
 /// Line.
 ///
@@ -32,7 +32,9 @@ impl Line {
     pub fn new(a: P2, b: P2) -> Line {
         assert!(
             !close_default_tol(&a, &b),
-            "Degenerate line: points are too close: ({:?}, {:?})", a, b
+            "Degenerate line: points are too close: ({:?}, {:?})",
+            a,
+            b
         );
         Line { a, b }
     }
@@ -77,18 +79,31 @@ impl Line {
         let v1 = self.ab_vec();
         let v2 = line.ab_vec();
 
+        // Finding the intersection point is constructed here as the problem of
+        // finding the two linear parameters, t1 and t2, which parameterise all
+        // points on the line. We have the restriction that for points on the
+        // line:
+        //
+        // t1 E [0.0, 1.0]
+        // t2 E [0.0, 1.0]
+        //
+        // The problem is constructed as solving a 2x2 linear system.
+
+        // Find the matrix determinant.
         let det = -v1.x * v2.y + v2.x * v1.y;
         let c = 1.0 / det;
+        // If the determinant is too small, then c can be NaN.
         if c.is_nan() {
             return None;
         }
 
+        // Linear solution.
         let dx = line.a.x - self.a.x;
         let dy = line.a.y - self.a.y;
-
         let t1 = c * (-v2.y * dx + v2.x * dy);
         let t2 = c * (-v1.y * dx + v1.x * dy);
 
+        // Check that the parameters are in range.
         if (0.0 <= t1) && (t1 <= 1.0) && (0.0 <= t2) && (t2 <= 1.0) {
             Some(self.eval_param(t1))
         } else {
@@ -141,7 +156,12 @@ mod tests {
         intersection_exists(lc(0.0, 1.0, 6.0, 5.0), lc(2.0, 6.0, 4.0, 0.0), 3.0, 3.0);
         intersection_exists(lc(1.0, 0.0, 0.0, 0.0), lc(0.0, 0.0, 0.0, -1.0), 0.0, 0.0);
         intersection_exists(lc(0.0, 1.0, 0.0, -1.0), lc(-1.0, 0.0, 0.0, 0.0), 0.0, 0.0);
-        intersection_exists(lc(0.0, 26774.988, 0.0, -50091.824), lc(-48912.94, 0.0, 0.0, 0.0), 0.0, 0.0);
+        intersection_exists(
+            lc(0.0, 26774.988, 0.0, -50091.824),
+            lc(-48912.94, 0.0, 0.0, 0.0),
+            0.0,
+            0.0,
+        );
     }
 
     /// Test intersecting pairs of lines where there is no intersection.
@@ -171,11 +191,19 @@ mod tests {
         /// - `c12`: positive value scaling `v1` from the point of intersection
         /// - `c21`: positive value scaling `v2` from the point of intersection
         /// - `c22`: positive value scaling `v2` from the point of intersection
-        fn new(intersection: P2, v1: V2, c11: f32, c12: f32, v2: V2, c21: f32, c22: f32) -> Option<Self> {
-            const MAG2_LIMIT: f32 = 0.2;       // Min v1, v2 length.
-            const PARALLEL_LIMIT: f32 = 0.95;  // Limit of |dot(|v1|, |v2|)|.
-            const MIN_LEN: f32 = 0.2;          // Min line length.
-            const MIN_OFS: f32 = 0.01;         // Min cij length.
+        fn new(
+            intersection: P2,
+            v1: V2,
+            c11: f32,
+            c12: f32,
+            v2: V2,
+            c21: f32,
+            c22: f32,
+        ) -> Option<Self> {
+            const MAG2_LIMIT: f32 = 0.2; // Min v1, v2 length.
+            const PARALLEL_LIMIT: f32 = 0.95; // Limit of |dot(|v1|, |v2|)|.
+            const MIN_LEN: f32 = 0.2; // Min line length.
+            const MIN_OFS: f32 = 0.01; // Min cij length.
 
             // Check that offset lengths are OK.
             if c11 < MIN_OFS || c12 < MIN_OFS || c21 < MIN_OFS || c22 < MIN_OFS {
@@ -221,9 +249,8 @@ mod tests {
     impl Arbitrary for IntersectingLinePair {
         type Parameters = ();
         type Strategy = BoxedStrategy<Self>;
-        fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
             let r: f32 = 10.0;
-            let s = 0.0..r;
             let q = -r..=r;
             let c = 0.01..r;
             (
