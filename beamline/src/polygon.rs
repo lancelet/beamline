@@ -112,15 +112,57 @@ impl Polygon {
         }
     }
 
-    /// Check if this `Polygon` is convex.
+    /// Checks if this `Polygon` is convex.
     ///
-    /// A convex polygon has all angles turning in the same direction.
+    /// A convex polygon has all angles turning in the same direction. A
+    /// convexity test only makes sense for a simple
+    /// (ie. non-self-intersecting) polygon, so this function assumes that the
+    /// polygon is known to be simple.
     pub fn is_convex(&self) -> bool {
         assert!(
             self.is_simple(f32::EPSILON),
             "Polygon is non-simple, so convexity is not defined."
         );
         all_equal((0..self.points.len()).filter_map(|vertex| self.winding_direction(vertex)))
+    }
+
+    /// Computes the centroid of a `Polygon`.
+    ///
+    /// The polygon must be a simple polygon for this equation to be correct.
+    pub fn centroid(&self) -> P2 {
+        assert!(self.is_simple(f32::EPSILON));
+
+        let n = self.points.len();
+        let mut sa: f32 = 0.0; // signed area
+        let mut cx: f32 = 0.0;
+        let mut cy: f32 = 0.0;
+        for i in 0..n {
+            let j = if i == n - 1 { 0 } else { i + 1 };
+            let pi = self.points[i];
+            let pj = self.points[j];
+
+            let z = pi.x * pj.y - pj.x * pi.y;
+            sa += z;
+            cx += (pi.x + pj.x) * z;
+            cy += (pi.y + pj.y) * z;
+        }
+
+        sa /= 2.0;
+        cx /= 6.0 * sa;
+        cy /= 6.0 * sa;
+
+        P2::new(cx, cy)
+    }
+
+    /// Checks if this `Polygon` intersects another polygon.
+    ///
+    /// Both polygons are assumed to be simple and convex. This uses a
+    /// separating axis test.
+    pub fn intersects_convex(&self, other: &Polygon) -> bool {
+        assert!(self.is_simple(f32::EPSILON) && self.is_convex());
+        assert!(other.is_simple(f32::EPSILON) && other.is_convex());
+
+        todo!()
     }
 }
 
@@ -151,6 +193,8 @@ fn cross_product(a: &V2, b: &V2) -> f32 {
 }
 
 /// Check if all items in an iterator are equal.
+///
+/// If the iterator is empty, this returns `true`.
 fn all_equal<A: PartialEq>(mut iter: impl Iterator<Item = A>) -> bool {
     match iter.next() {
         None => true,
@@ -217,6 +261,8 @@ fn non_adjacent_edges_intersect(polygon: &Polygon) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use crate::compare::Tol;
 
     /// A square polygon.
     fn square() -> Polygon {
@@ -279,5 +325,39 @@ mod tests {
             P2::new(0.0, 1.0),
         ]);
         assert!(!non_convex.is_convex())
+    }
+
+    proptest! {
+        /// The centroid of a right triangle is one-third the distance along
+        /// its edges from the right-angled corner.
+        #[test]
+        fn test_right_triangle_centroid(w in 0.5f32..10.0, h in 0.5f32..10.0) {
+            let right_triangle = Polygon::new(vec![
+                P2::new(0.0, 0.0),
+                P2::new(w, 0.0),
+                P2::new(0.0, h)
+            ]);
+            let expected_centroid = P2::new(w/3.0, h/3.0);
+            let centroid = right_triangle.centroid();
+
+            let tol = Tol::default().scale(1e1);
+            assert_close!(tol, centroid, expected_centroid);
+        }
+
+        /// The centroid of a rectangle is half way along its edges.
+        #[test]
+        fn test_rectangle_centroid(w in 0.5f32..10.0, h in 0.5f32..10.0) {
+            let rectangle = Polygon::new(vec![
+                P2::new(0.0, 0.0),
+                P2::new(w, 0.0),
+                P2::new(w, h),
+                P2::new(0.0, h)
+            ]);
+            let expected_centroid = P2::new(w/2.0, h/2.0);
+            let centroid = rectangle.centroid();
+
+            let tol = Tol::default().scale(1e1);
+            assert_close!(tol, centroid, expected_centroid);
+        }
     }
 }
