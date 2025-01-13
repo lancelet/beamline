@@ -6,6 +6,18 @@ use itertools::Itertools;
 use std::ops::Range;
 
 /// Tiler: Assigns lines to a regular grid of tiles.
+///
+/// The intended lifecycle of a `Tiler` is as follows:
+///
+/// 1. It should be created with [`Tiler::new`] at the start of the renderer,
+///    and re-used for each frame.
+/// 2. Within a frame, lines should be added to the tiler using [`Tiler::add`].
+/// 3. When a frame is to be drawn, [`Tiler::drain`] should be called to
+///    produce the necessary rendering structures.
+///
+/// Re-using the tiler means that the vector containing the styled line
+/// information is re-used at its full capacity, and not re-allocated more
+/// than necessary.
 pub struct Tiler {
     area_width: u32,
     area_height: u32,
@@ -28,7 +40,6 @@ impl Tiler {
         // Compute numbers of x and y tiles using a "ceiling" integer divide.
         let n_x_tiles = (area_width + tile_width - 1) / tile_width;
         let n_y_tiles = (area_height + tile_height - 1) / tile_height;
-        let n_tiles = n_x_tiles * n_y_tiles;
 
         Tiler {
             area_width,
@@ -75,9 +86,9 @@ impl Tiler {
         }
     }
 
-    /// Collect all tiles and the lines they contain.
+    /// Drain the tiler to Collect all tiles and the lines they contain.
     ///
-    /// This consumes the `Tiler`.
+    /// This empties the `Tiler`.
     ///
     /// It returns two components:
     ///
@@ -86,9 +97,12 @@ impl Tiler {
     /// 2. A vector of `TileInfo`, which indicates, for each tile location,
     ///    the start index in the `StyledLine` vector and the number of
     ///    lines each tile contains.
-    pub fn collect(self) -> (Vec<TileInfo>, Vec<StyledLine>) {
+    ///
+    /// This has the complexity of a sort over the lines, coupled with two
+    /// linear passes over the sorted lines.
+    pub fn drain(&mut self) -> (Vec<TileInfo>, Vec<StyledLine>) {
         // Sort the lines according to their linear index.
-        let mut lines = self.lines;
+        let mut lines: Vec<(usize, StyledLine)> = self.lines.drain(..).collect();
         lines.sort_by_key(|(ix, _)| *ix);
 
         // Process the lines to find the tile offsets.
@@ -100,9 +114,9 @@ impl Tiler {
             .into_iter()
             .map(|(lindex, chunk)| {
                 // Find tile coordinates from linear index.
-                let tile_y = (lindex / self.n_x_tiles as usize) as u32;
-                let tile_x = (lindex % self.n_x_tiles as usize) as u32;
+                let (tile_x, tile_y) = self.tile_unlindex(lindex);
 
+                // Construct the latest tile info structure.
                 let n_lines = chunk.count() as u32;
                 let info = TileInfo {
                     tile_x,
@@ -137,6 +151,22 @@ impl Tiler {
         assert!(tile_y < self.n_y_tiles);
         let ix = self.n_x_tiles as usize * tile_y as usize + tile_x as usize;
         ix
+    }
+
+    /// Compute the (x,y) index of a tile from its linear index.
+    ///
+    /// # Parameters
+    ///
+    /// - `lindex`: Linear index of the tile.
+    ///
+    /// # Returns
+    ///
+    /// An `(tile_x, tile_y)` pair.
+    fn tile_unlindex(&self, lindex: usize) -> (u32, u32) {
+        let tile_y = (lindex / self.n_x_tiles as usize) as u32;
+        let tile_x = (lindex % self.n_x_tiles as usize) as u32;
+        assert!(self.tile_ix(tile_x, tile_y) == lindex); // check inverse
+        (tile_x, tile_y)
     }
 
     /// Check if a tile intersects a supplied line.
@@ -195,10 +225,15 @@ impl Tiler {
     }
 }
 
+/// Information about a tile.
 pub struct TileInfo {
+    /// X (horizontal) coordinate of the tile.
     pub tile_x: u32,
+    /// Y (vertical) coordinate of the tile.
     pub tile_y: u32,
+    /// Start index of the tile's lines in the list of lines.
     pub start_index: u32,
+    /// Number of lines in the tile.
     pub n_lines: u32,
 }
 
