@@ -17,14 +17,14 @@ pub struct Polygon {
     vertices: Vec<P2>,
 }
 impl Polygon {
-    /// Creates a new `Polygon` from the given points.
+    /// Creates a new `Polygon` from the given vertices.
     ///
-    /// There must be at least three points in the polygon.
+    /// There must be at least three vertices in the polygon.
     ///
     /// # Parameters
     ///
-    /// - `vertices`: The vector of points for the polygon. This vector must
-    ///   contain at least 3 points.
+    /// - `vertices`: The vector of vertices for the polygon. This vector must
+    ///   contain at least 3 vertices.
     ///
     /// # Returns
     ///
@@ -53,7 +53,7 @@ impl Polygon {
     /// # Parameters
     ///
     /// - `min_dist` distance below which vertices of the polygon are assumed
-    ///   to self-intersect.
+    ///   to be coincident.
     ///
     /// # Returns
     ///
@@ -185,6 +185,8 @@ impl Polygon {
     /// perpendicular to the supplied axis. Each polygon forms an interval
     /// when projected onto this line. If the intervals are disjoint then the
     /// supplied axis was a "separating axis".
+    ///
+    /// This test works for all simple, convex polygons.
     ///
     /// # Parameters
     ///

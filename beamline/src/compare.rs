@@ -13,7 +13,12 @@ pub enum Tol<S> {
     /// Relative tolerance.
     Rel(S),
     /// Both absolute and relative tolerance.
-    AbsRel { atol: S, rtol: S },
+    AbsRel {
+        /// Absolute tolerance value.
+        atol: S,
+        /// Relative tolerance value.
+        rtol: S,
+    },
 }
 impl<S> Tol<S>
 where
@@ -37,6 +42,7 @@ where
         }
     }
 
+    /// Scale a tolerance by the supplied factor.
     pub fn scale(&self, factor: S) -> Tol<S>
     where
         S: Mul<Output = S> + Copy,

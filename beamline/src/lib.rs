@@ -9,3 +9,4 @@ pub use types::V2;
 
 pub use line::Line;
 pub use polygon::Polygon;
+pub use polygon::WindingDirection;
