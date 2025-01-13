@@ -149,6 +149,7 @@ impl Renderer {
 
         // Fetch tile info and styled lines from the tiler.
         let (tile_infos, styled_lines) = self.tiler.drain();
+        let n_instances = tile_infos.len() as u32;
         self.buffers.write_tile_info(device, queue, tile_infos);
         self.buffers.write_line_array(device, queue, styled_lines);
 
@@ -194,6 +195,7 @@ impl Renderer {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &viewport_bind_group, &[]);
             render_pass.set_bind_group(1, &tile_bind_group, &[]);
+            render_pass.draw(0..6, 0..n_instances);
         }
     }
 }
