@@ -6,6 +6,7 @@ mod bbox;
 mod interval;
 mod line;
 mod polygon;
+pub mod style;
 mod types;
 
 pub use types::P2;
