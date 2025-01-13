@@ -6,6 +6,7 @@ use std::ops::{Mul, Neg, Sub};
 /// Tolerance to use when performing approximate comparisons.
 ///
 /// When comparing floating-point values, [`Tol::AbsRel`] is a robust choice.
+#[allow(unused)]
 #[derive(Debug, Clone, Copy)]
 pub enum Tol<S> {
     /// Absolute tolerance.
@@ -20,6 +21,7 @@ pub enum Tol<S> {
         rtol: S,
     },
 }
+#[allow(unused)]
 impl<S> Tol<S>
 where
     S: PartialOrd + Default + Neg<Output = S>,

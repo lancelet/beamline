@@ -9,6 +9,7 @@ path = "src/lib.rs"
 name = "beamline"
 
 [dependencies]
+bytemuck = "1.21.0"
 cgmath = "0.18.0"
 itertools = "0.14.0"
 kiddo = "5.0.3"

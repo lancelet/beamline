@@ -160,6 +160,7 @@ impl Polygon {
     ///
     /// Both polygons are assumed to be simple and convex. This uses a
     /// separating axis test.
+    /*
     pub fn intersects_convex(&self, other: &Polygon) -> bool {
         assert!(self.is_simple(f32::EPSILON) && self.is_convex());
         assert!(other.is_simple(f32::EPSILON) && other.is_convex());
@@ -179,6 +180,7 @@ impl Polygon {
         }
         true
     }
+    */
 
     /// Check if a supplied axis is a "separating axis" for two polygons.
     ///
@@ -344,7 +346,7 @@ fn non_adjacent_edges_intersect(polygon: &Polygon) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compare::Tol;
+    use crate::{assert_close, compare::Tol};
     use proptest::prelude::*;
 
     /// A square polygon.
@@ -410,6 +412,8 @@ mod tests {
         assert!(!non_convex.is_convex())
     }
 
+    /*
+
     /// Test whether two non-intersecting polygons intersect.
     ///
     /// These two polygons have intersecting bounding boxes, but do not
@@ -471,6 +475,8 @@ mod tests {
 
         assert!(a.intersects_convex(&b))
     }
+
+    */
 
     proptest! {
         /// The centroid of a right triangle is one-third the distance along

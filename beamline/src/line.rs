@@ -134,6 +134,8 @@ impl CloseCmp for Line {
 
 #[cfg(test)]
 mod tests {
+    use crate::assert_close;
+
     use super::*;
     use cgmath::InnerSpace;
     use proptest::prelude::*;

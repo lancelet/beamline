@@ -12,3 +12,8 @@ pub type V2 = Vector2<f32>;
 pub fn v2_rot90_anticlockwise(v: V2) -> V2 {
     V2::new(-v.y, v.x)
 }
+
+/// Compute "ceiling division" for `u32` values: `ceil(a / b)`.
+pub fn ceil_div_u32(a: u32, b: u32) -> u32 {
+    (a + b - 1) / b
+}

@@ -37,21 +37,6 @@ impl Bbox {
         self.y_interval.include(point.y);
     }
 
-    /// Tests whether this bounding box contains a point.
-    pub fn contains(&self, point: P2) -> bool {
-        self.x_interval.contains(point.x) && self.y_interval.contains(point.y)
-    }
-
-    /// Tests whether this bounding box overlaps another bounding box.
-    pub fn overlaps(&self, other: &Bbox) -> bool {
-        self.x_interval.overlaps(&other.x_interval) && self.y_interval.overlaps(&other.y_interval)
-    }
-
-    /// Tests whether this bounding box is disjoint from another bounding box.
-    pub fn disjoint(&self, other: &Bbox) -> bool {
-        !self.overlaps(other)
-    }
-
     /// Returns the minimum x value of the bounding box.
     pub fn min_x(&self) -> f32 {
         self.x_interval.min()

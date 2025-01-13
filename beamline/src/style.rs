@@ -1,6 +1,6 @@
 //! Line styles.
 
-use crate::{Line, Polygon, V2};
+use crate::{polygon::Polygon, Line, V2};
 use cgmath::InnerSpace;
 
 /// Describes the cap at the end of lines.
@@ -33,6 +33,11 @@ impl Color {
             blue,
             alpha,
         }
+    }
+
+    /// Return the color components as an RGBA array.
+    pub fn as_array(&self) -> [f32; 4] {
+        [self.red, self.green, self.blue, self.alpha]
     }
 }
 

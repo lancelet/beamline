@@ -1,7 +1,12 @@
 //! Assign lines to tiles.
 
-use crate::{bbox::Bbox, style::StyledLine, types::v2_rot90_anticlockwise, Line, Polygon, P2, V2};
-use cgmath::num_traits::Euclid;
+use crate::{
+    bbox::Bbox,
+    polygon::Polygon,
+    style::StyledLine,
+    types::{ceil_div_u32, v2_rot90_anticlockwise},
+    Line, P2, V2,
+};
 use itertools::Itertools;
 use std::ops::Range;
 
@@ -19,8 +24,6 @@ use std::ops::Range;
 /// information is re-used at its full capacity, and not re-allocated more
 /// than necessary.
 pub struct Tiler {
-    area_width: u32,
-    area_height: u32,
     tile_width: u32,
     tile_height: u32,
     n_x_tiles: u32,
@@ -38,18 +41,35 @@ impl Tiler {
         assert!(tile_height > 0);
 
         // Compute numbers of x and y tiles using a "ceiling" integer divide.
-        let n_x_tiles = (area_width + tile_width - 1) / tile_width;
-        let n_y_tiles = (area_height + tile_height - 1) / tile_height;
+        let (n_x_tiles, n_y_tiles) = n_tiles(area_width, area_height, tile_width, tile_height);
 
         Tiler {
-            area_width,
-            area_height,
             tile_width,
             tile_height,
             n_x_tiles,
             n_y_tiles,
             lines: Vec::new(),
         }
+    }
+
+    /// Resize the tiler to account for a new renderable area.
+    ///
+    /// This clears the buffer inside the tiler, meaning that it will have no
+    /// recorded lines after this operation.
+    ///
+    /// # Parameters
+    ///
+    /// - `area_width`: Width of the renderable area.
+    /// - `area_height`: Height of the renderable area.
+    pub fn resize(&mut self, area_width: u32, area_height: u32) {
+        assert!(area_width > 0);
+        assert!(area_height > 0);
+
+        let (n_x_tiles, n_y_tiles) =
+            n_tiles(area_width, area_height, self.tile_width, self.tile_height);
+        self.n_x_tiles = n_x_tiles;
+        self.n_y_tiles = n_y_tiles;
+        self.lines.clear();
     }
 
     /// Add a styled line to the tiler.
@@ -223,6 +243,13 @@ impl Tiler {
             P2::new(min_x, max_y),
         ])
     }
+}
+
+/// Compute the number of required tiles.
+fn n_tiles(area_width: u32, area_height: u32, tile_width: u32, tile_height: u32) -> (u32, u32) {
+    let n_x_tiles = ceil_div_u32(area_width, tile_width);
+    let n_y_tiles = ceil_div_u32(area_height, tile_height);
+    (n_x_tiles, n_y_tiles)
 }
 
 /// Information about a tile.

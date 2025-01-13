@@ -7,15 +7,6 @@ pub struct Interval {
     end: f32,
 }
 impl Interval {
-    /// Creates an interval with two end points.
-    ///
-    /// The order of `p1` and `p2` is not important.
-    pub fn new(p1: f32, p2: f32) -> Interval {
-        let mut interval = Interval::singleton(p1);
-        interval.include(p2);
-        interval
-    }
-
     /// Create a singleton interval which contains just one `f32` value.
     pub fn singleton(value: f32) -> Interval {
         Interval {
@@ -33,19 +24,9 @@ impl Interval {
         }
     }
 
-    /// Tests if a value is contained by this interval.
-    pub fn contains(&self, value: f32) -> bool {
-        value >= self.start && value <= self.end
-    }
-
     /// Tests if two intervals are completely disjoint from one another.
     pub fn disjoint(&self, other: &Interval) -> bool {
         self.end < other.start || other.end < self.start
-    }
-
-    /// Tests if two intervals overlap.
-    pub fn overlaps(&self, other: &Interval) -> bool {
-        !self.disjoint(other)
     }
 
     /// Returns the minimum value of an interval.
