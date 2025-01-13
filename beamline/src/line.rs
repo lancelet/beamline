@@ -8,11 +8,11 @@ use crate::V2;
 /// Line.
 ///
 /// To construct a line, use [`Line::new`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Line {
-    /// End point of the line.
+    /// Start point of the line.
     a: P2,
-    /// Other end point of the line.
+    /// End point of the line.
     b: P2,
 }
 impl Line {
@@ -37,6 +37,16 @@ impl Line {
             b
         );
         Line { a, b }
+    }
+
+    /// Returns the start point of the line.
+    pub fn start(&self) -> P2 {
+        self.a
+    }
+
+    /// Returns the end point of the line.
+    pub fn end(&self) -> P2 {
+        self.b
     }
 
     /// Return the vector along the line.

@@ -47,4 +47,14 @@ impl Interval {
     pub fn overlaps(&self, other: &Interval) -> bool {
         !self.disjoint(other)
     }
+
+    /// Returns the minimum value of an interval.
+    pub fn min(&self) -> f32 {
+        self.start
+    }
+
+    /// Returns the maximum value of an interval.
+    pub fn max(&self) -> f32 {
+        self.end
+    }
 }

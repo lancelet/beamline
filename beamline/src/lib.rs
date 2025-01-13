@@ -7,6 +7,8 @@ mod interval;
 mod line;
 mod polygon;
 pub mod style;
+#[allow(unused)] // TODO: For development only.
+mod tiler;
 mod types;
 
 pub use types::P2;

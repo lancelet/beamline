@@ -1,8 +1,8 @@
 //! 2D polygons.
 
 use super::{types::P2, Line};
-use crate::interval::Interval;
 use crate::V2;
+use crate::{bbox::Bbox, interval::Interval};
 use cgmath::{EuclideanSpace, InnerSpace};
 use kiddo::{KdTree, SquaredEuclidean};
 
@@ -222,6 +222,11 @@ impl Polygon {
         // If the intervals are disjoint then `axis` was a separating axis
         // for the two polygons.
         interval_self.disjoint(&interval_other)
+    }
+
+    /// Returns the axis-aligned bounding box of the polygon.
+    pub fn bbox(&self) -> Bbox {
+        Bbox::including(self.vertices.iter()).unwrap()
     }
 }
 
