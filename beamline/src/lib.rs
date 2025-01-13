@@ -1,5 +1,6 @@
 #[macro_use]
 pub mod compare;
+mod interval;
 mod line;
 mod polygon;
 mod types;

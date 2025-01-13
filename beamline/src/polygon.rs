@@ -1,6 +1,7 @@
 //! 2D polygons.
 
 use super::{types::P2, Line};
+use crate::interval::Interval;
 use crate::V2;
 use cgmath::{EuclideanSpace, InnerSpace};
 use kiddo::{KdTree, SquaredEuclidean};
@@ -221,38 +222,6 @@ impl Polygon {
         // If the intervals are disjoint then `axis` was a separating axis
         // for the two polygons.
         interval_self.disjoint(&interval_other)
-    }
-}
-
-/// Interval of floating-point values.
-///
-/// It includes both its end points.
-#[derive(Debug)]
-struct Interval {
-    start: f32,
-    end: f32,
-}
-impl Interval {
-    /// Create a singleton interval which contains just one `f32` value.
-    fn singleton(value: f32) -> Interval {
-        Interval {
-            start: value,
-            end: value,
-        }
-    }
-
-    /// Expand an interval, if necessary, to include another `f32` value.
-    fn include(&mut self, value: f32) {
-        if value < self.start {
-            self.start = value;
-        } else if value > self.end {
-            self.end = value;
-        }
-    }
-
-    /// Test if two intervals are completely disjoint from one another.
-    fn disjoint(&self, other: &Interval) -> bool {
-        self.end < other.start || other.end < self.start
     }
 }
 
