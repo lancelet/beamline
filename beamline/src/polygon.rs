@@ -2,6 +2,7 @@
 
 use super::{types::P2, Line};
 use crate::V2;
+use cgmath::{EuclideanSpace, InnerSpace};
 use kiddo::{KdTree, SquaredEuclidean};
 
 /// Closed polygon.
@@ -162,8 +163,114 @@ impl Polygon {
         assert!(self.is_simple(f32::EPSILON) && self.is_convex());
         assert!(other.is_simple(f32::EPSILON) && other.is_convex());
 
-        todo!()
+        // Find a point to use as a center for the separating axis test.
+        // We choose the average of the centroid of the two polygons.
+        let center = (self.centroid() + other.centroid().to_vec()) / 2.0;
+
+        // Test all axes of both polygons to see if they are separating
+        // axes.
+        let edges = self.edges().chain(other.edges());
+        for edge in edges {
+            let axis = edge.ab_vec();
+            if self.is_separating_axis(other, axis, Some(center)) {
+                return false;
+            }
+        }
+        true
     }
+
+    /// Check if a supplied axis is a "separating axis" for two polygons.
+    ///
+    /// The separating axis test projects both polygons onto a line which is
+    /// perpendicular to the supplied axis. Each polygon forms an interval
+    /// when projected onto this line. If the intervals are disjoint then the
+    /// supplied axis was a "separating axis".
+    ///
+    /// # Parameters
+    ///
+    /// - `other`: Other polygon in the test.
+    /// - `axis`: Candidate separating axis.
+    /// - `opt_center`: Optional center to use as a reference for projection.
+    ///   If this is `None` then the center is chosen as a point which is the
+    ///   average of the centroid of the two polygons.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the supplied axis was a separating axis, `false` otherwise.
+    pub fn is_separating_axis(&self, other: &Polygon, axis: V2, opt_center: Option<P2>) -> bool {
+        assert!(self.is_simple(f32::EPSILON) && self.is_convex());
+        assert!(other.is_simple(f32::EPSILON) && other.is_convex());
+
+        // The center to use. If `opt_center` is provided, we use that;
+        // otherwise we choose a point which is the average of the centroid
+        // of the two polygons.
+        let center =
+            opt_center.unwrap_or_else(|| (self.centroid() + other.centroid().to_vec()) / 2.0);
+
+        // Produce a 90-degree rotation of the axis. This is a line onto
+        // which we should project for the separating axis test.
+        let direction = V2::new(-axis.y, axis.x);
+
+        // Project both polygons onto the line formed by `center` and
+        // `direction`.
+        let interval_self = project_polygon_to_line(center, direction, self);
+        let interval_other = project_polygon_to_line(center, direction, other);
+
+        // If the intervals are disjoint then `axis` was a separating axis
+        // for the two polygons.
+        interval_self.disjoint(&interval_other)
+    }
+}
+
+/// Interval of floating-point values.
+///
+/// It includes both its end points.
+#[derive(Debug)]
+struct Interval {
+    start: f32,
+    end: f32,
+}
+impl Interval {
+    /// Create a singleton interval which contains just one `f32` value.
+    fn singleton(value: f32) -> Interval {
+        Interval {
+            start: value,
+            end: value,
+        }
+    }
+
+    /// Expand an interval, if necessary, to include another `f32` value.
+    fn include(&mut self, value: f32) {
+        if value < self.start {
+            self.start = value;
+        } else if value > self.end {
+            self.end = value;
+        }
+    }
+
+    /// Test if two intervals are completely disjoint from one another.
+    fn disjoint(&self, other: &Interval) -> bool {
+        self.end < other.start || other.end < self.start
+    }
+}
+
+/// Project a polygon to a line, producing an interval.
+///
+/// # Parameters
+///
+/// - `center`: A point on the line corresponding to the zero point of
+///   projections.
+/// - `direction`: Vector along the direction of the line corresponding to
+///   positive values, and providing a scale.
+/// - `polygon`: Polygon to project to the line.
+fn project_polygon_to_line(center: P2, direction: V2, polygon: &Polygon) -> Interval {
+    let mut p_iter = polygon.points.iter();
+    let p_first = p_iter.next().unwrap(); // must be at least one point
+    let mut interval = Interval::singleton((p_first - center).dot(direction));
+    for p in p_iter {
+        interval.include((p - center).dot(direction))
+    }
+    interval
 }
 
 /// Winding direction.
@@ -261,8 +368,8 @@ fn non_adjacent_edges_intersect(polygon: &Polygon) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
     use crate::compare::Tol;
+    use proptest::prelude::*;
 
     /// A square polygon.
     fn square() -> Polygon {
@@ -290,13 +397,13 @@ mod tests {
         assert!(square().is_simple(1e-3))
     }
 
-    // A "bowtie" should not be a simple polygon.
+    /// A "bowtie" should not be a simple polygon.
     #[test]
     fn test_bowtie_is_not_simple_polygon() {
         assert!(!bowtie().is_simple(1e-3))
     }
 
-    // A polygon with coincident points should not be a simple polygon.
+    /// A polygon with coincident points should not be a simple polygon.
     #[test]
     fn test_coincident_points_not_simple_polygon() {
         let coincident = Polygon::new(vec![
@@ -308,13 +415,13 @@ mod tests {
         assert!(!coincident.is_simple(1e-3))
     }
 
-    // A square should be convex.
+    /// A square should be convex.
     #[test]
     fn test_square_is_convex() {
         assert!(square().is_convex())
     }
 
-    // A non-convex polygon should be non-convex.
+    /// A non-convex polygon should be non-convex.
     #[test]
     fn test_non_convex_is_not_convex() {
         let non_convex = Polygon::new(vec![
@@ -325,6 +432,68 @@ mod tests {
             P2::new(0.0, 1.0),
         ]);
         assert!(!non_convex.is_convex())
+    }
+
+    /// Test whether two non-intersecting polygons intersect.
+    ///
+    /// These two polygons have intersecting bounding boxes, but do not
+    /// intersect.
+    #[test]
+    fn test_intersects_convex_example_1() {
+        let a = Polygon::new(vec![
+            P2::new(4.0, 0.0),
+            P2::new(7.0, 0.0),
+            P2::new(7.0, 3.0),
+            P2::new(4.0, 3.0),
+        ]);
+        let b = Polygon::new(vec![
+            P2::new(1.0, 1.0),
+            P2::new(6.0, 6.0),
+            P2::new(5.0, 7.0),
+            P2::new(0.0, 2.0),
+        ]);
+
+        assert!(!a.intersects_convex(&b));
+    }
+
+    /// Test whether two intersecting polygons intersect.
+    ///
+    /// These two polygons do intersect.
+    #[test]
+    fn test_intersects_convex_example_2() {
+        let a = Polygon::new(vec![
+            P2::new(4.0, 0.0),
+            P2::new(7.0, 0.0),
+            P2::new(7.0, 3.0),
+            P2::new(4.0, 3.0),
+        ]);
+        let b = Polygon::new(vec![
+            P2::new(3.0, 1.0),
+            P2::new(8.0, 6.0),
+            P2::new(7.0, 7.0),
+            P2::new(2.0, 2.0),
+        ]);
+
+        assert!(a.intersects_convex(&b));
+    }
+
+    /// Test whether a polygon completely contained within another intersects.
+    #[test]
+    fn test_intersects_convex_example_3() {
+        let a = Polygon::new(vec![
+            P2::new(0.0, 0.0),
+            P2::new(3.0, 0.0),
+            P2::new(3.0, 3.0),
+            P2::new(0.0, 3.0),
+        ]);
+        let b = Polygon::new(vec![
+            P2::new(1.0, 1.0),
+            P2::new(2.0, 1.0),
+            P2::new(2.0, 2.0),
+            P2::new(1.0, 2.0),
+        ]);
+
+        assert!(a.intersects_convex(&b))
     }
 
     proptest! {
