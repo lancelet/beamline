@@ -1,5 +1,8 @@
 #[macro_use]
 pub mod compare;
+#[allow(unused)] // TODO: For development only.
+mod bbox;
+#[allow(unused)] // TODO: For development only.
 mod interval;
 mod line;
 mod polygon;
