@@ -13,8 +13,8 @@ use kiddo::{KdTree, SquaredEuclidean};
 ///
 /// To construct a Polygon, use [`Polygon::new`].
 pub struct Polygon {
-    /// Points for the polygon.
-    points: Vec<P2>,
+    /// Vertices of the polygon.
+    vertices: Vec<P2>,
 }
 impl Polygon {
     /// Creates a new `Polygon` from the given points.
@@ -23,25 +23,25 @@ impl Polygon {
     ///
     /// # Parameters
     ///
-    /// - `point`: The vector of points for the polygon. This vector must
+    /// - `vertices`: The vector of points for the polygon. This vector must
     ///   contain at least 3 points.
     ///
     /// # Returns
     ///
     /// A new `Polygon`.
-    pub fn new(points: Vec<P2>) -> Self {
-        assert!(points.len() >= 3);
-        Polygon { points }
+    pub fn new(vertices: Vec<P2>) -> Self {
+        assert!(vertices.len() >= 3);
+        Polygon { vertices }
     }
 
     /// Construct all edges of the polygon.
     ///
     /// This returns an iterator which will produce all the lines that are the
-    /// edges of the polygon, drawn between its pairs of points.
+    /// edges of the polygon, drawn between its pairs of vertices.
     pub fn edges(&self) -> impl Iterator<Item = Line> + use<'_> {
-        self.points
+        self.vertices
             .iter()
-            .zip(self.points.iter().skip(1).chain(self.points.first()))
+            .zip(self.vertices.iter().skip(1).chain(self.vertices.first()))
             .map(|(a, b)| Line::new(a.clone(), b.clone()))
     }
 
@@ -59,7 +59,7 @@ impl Polygon {
     ///
     /// - `true` if the `Polygon` is a simple polygon.
     pub fn is_simple(&self, min_dist: f32) -> bool {
-        let pt_test = points_coincident(min_dist, self.points.iter());
+        let pt_test = points_coincident(min_dist, self.vertices.iter());
         let edge_test = non_adjacent_edges_intersect(&self);
         !(pt_test || edge_test)
     }
@@ -75,11 +75,11 @@ impl Polygon {
     ///
     /// # Returns
     ///
-    /// - `None`: if the points are approximately collinear, and no winding
+    /// - `None`: if the vertices are approximately collinear, and no winding
     ///   direction is defined.
     /// - `Some(direction)`: if the winding direction is defined.
     pub fn winding_direction(&self, vertex: usize) -> Option<WindingDirection> {
-        let n = self.points.len();
+        let n = self.vertices.len();
         assert!(vertex < n);
 
         // Find indices of the previous, current and next vertices. The
@@ -89,9 +89,9 @@ impl Polygon {
         let i_next = (vertex + 1) % n;
 
         // Previous point, current point and next point.
-        let p0 = self.points[i_prev];
-        let p1 = self.points[i_curr];
-        let p2 = self.points[i_next];
+        let p0 = self.vertices[i_prev];
+        let p1 = self.vertices[i_curr];
+        let p2 = self.vertices[i_next];
 
         // Compute vectors along the edges.
         let a = p1 - p0;
@@ -124,7 +124,7 @@ impl Polygon {
             self.is_simple(f32::EPSILON),
             "Polygon is non-simple, so convexity is not defined."
         );
-        all_equal((0..self.points.len()).filter_map(|vertex| self.winding_direction(vertex)))
+        all_equal((0..self.vertices.len()).filter_map(|vertex| self.winding_direction(vertex)))
     }
 
     /// Computes the centroid of a `Polygon`.
@@ -133,14 +133,14 @@ impl Polygon {
     pub fn centroid(&self) -> P2 {
         assert!(self.is_simple(f32::EPSILON));
 
-        let n = self.points.len();
+        let n = self.vertices.len();
         let mut sa: f32 = 0.0; // signed area
         let mut cx: f32 = 0.0;
         let mut cy: f32 = 0.0;
         for i in 0..n {
             let j = if i == n - 1 { 0 } else { i + 1 };
-            let pi = self.points[i];
-            let pj = self.points[j];
+            let pi = self.vertices[i];
+            let pj = self.vertices[j];
 
             let z = pi.x * pj.y - pj.x * pi.y;
             sa += z;
@@ -264,7 +264,7 @@ impl Interval {
 ///   positive values, and providing a scale.
 /// - `polygon`: Polygon to project to the line.
 fn project_polygon_to_line(center: P2, direction: V2, polygon: &Polygon) -> Interval {
-    let mut p_iter = polygon.points.iter();
+    let mut p_iter = polygon.vertices.iter();
     let p_first = p_iter.next().unwrap(); // must be at least one point
     let mut interval = Interval::singleton((p_first - center).dot(direction));
     for p in p_iter {
