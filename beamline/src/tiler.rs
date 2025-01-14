@@ -8,7 +8,7 @@ use crate::{
     Line, P2, V2,
 };
 use itertools::Itertools;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 /// Tiler: Assigns lines to a regular grid of tiles.
 ///
@@ -23,6 +23,7 @@ use std::ops::Range;
 /// Re-using the tiler means that the vector containing the styled line
 /// information is re-used at its full capacity, and not re-allocated more
 /// than necessary.
+#[derive(Debug)]
 pub struct Tiler {
     tile_width: u32,
     tile_height: u32,
@@ -217,7 +218,7 @@ impl Tiler {
             V2::new(1.0, 0.0),
             V2::new(0.0, 1.0),
         ];
-        let center = Some(P2::new(0.0, 0.0));
+        let center = P2::new(0.0, 0.0);
         let tile = self.tile_polygon(tile_x, tile_y);
 
         for axis in test_axes {
@@ -239,7 +240,7 @@ impl Tiler {
         Polygon::new(vec![
             P2::new(min_x, min_y),
             P2::new(max_x, min_y),
-            P2::new(max_y, max_y),
+            P2::new(max_x, max_y),
             P2::new(min_x, max_y),
         ])
     }
@@ -253,6 +254,7 @@ fn n_tiles(area_width: u32, area_height: u32, tile_width: u32, tile_height: u32)
 }
 
 /// Information about a tile.
+#[derive(Debug)]
 pub struct TileInfo {
     /// X (horizontal) coordinate of the tile.
     pub tile_x: u32,
@@ -301,20 +303,20 @@ impl TilesIntersection {
         } else {
             Some(TilesIntersection {
                 min_x_tile: self.min_x_tile,
-                max_x_tile: self.max_x_tile.min(n_x_tiles),
+                max_x_tile: self.max_x_tile.min(n_x_tiles - 1),
                 min_y_tile: self.min_y_tile,
-                max_y_tile: self.max_y_tile.min(n_y_tiles),
+                max_y_tile: self.max_y_tile.min(n_y_tiles - 1),
             })
         }
     }
 
     /// Returns a range for the x (horizontal) tiles.
-    pub fn x_tiles(&self) -> Range<u32> {
-        self.min_x_tile..self.max_x_tile
+    pub fn x_tiles(&self) -> RangeInclusive<u32> {
+        self.min_x_tile..=self.max_x_tile
     }
 
     /// Returns a range for the y (vertical) tiles.
-    pub fn y_tiles(&self) -> Range<u32> {
-        self.min_y_tile..self.max_y_tile
+    pub fn y_tiles(&self) -> RangeInclusive<u32> {
+        self.min_y_tile..=self.max_y_tile
     }
 }

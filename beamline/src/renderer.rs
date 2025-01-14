@@ -5,6 +5,7 @@ use crate::{
     Color, Line,
 };
 
+#[derive(Debug)]
 pub struct Renderer {
     area_width: u32,
     area_height: u32,
@@ -227,7 +228,7 @@ fn create_render_pipeline(
             module: &shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Bgra8Unorm, // TODO
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],

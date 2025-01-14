@@ -19,6 +19,7 @@ log = "0.4.22"
 pollster = "0.3"
 wgpu = "23.0.1"
 winit = "0.30.8"
+beamline = { path = "../beamline" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"

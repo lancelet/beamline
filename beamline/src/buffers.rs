@@ -2,6 +2,7 @@ use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
 
 use crate::{style, tiler, Color};
 
+#[derive(Debug)]
 pub struct Buffers {
     viewport_buffer: wgpu::Buffer,
     shader_options_buffer: wgpu::Buffer,
@@ -274,11 +275,12 @@ impl TileInfo {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct StyledLine {
-    start: [f32; 2],
-    end: [f32; 2],
-    width: f32,
-    cap: u32,
-    color: [f32; 4],
+    start: [f32; 2],    // 8 bytes
+    end: [f32; 2],      // 8 bytes
+    width: f32,         // 4 bytes
+    cap: u32,           // 4 bytes
+    color: [f32; 4],    // 16 bytes
+    _padding: [f32; 2], // 8 bytes
 }
 impl StyledLine {
     pub fn new_from_style_line(styled_line: style::StyledLine) -> Self {
@@ -288,6 +290,7 @@ impl StyledLine {
             width: styled_line.style.width,
             cap: styled_line.style.cap as u32,
             color: styled_line.style.color.as_array(),
+            _padding: [0.0, 0.0],
         }
     }
 }

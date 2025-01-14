@@ -180,6 +180,7 @@ dependencies = [
 name = "asteroids"
 version = "0.1.0"
 dependencies = [
+ "beamline",
  "bytemuck",
  "cfg-if",
  "cgmath",
@@ -224,7 +225,6 @@ dependencies = [
  "bytemuck",
  "cgmath",
  "itertools 0.14.0",
- "kiddo",
  "proptest",
  "wgpu",
 ]

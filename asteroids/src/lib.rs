@@ -4,11 +4,14 @@ mod frame_timer;
 #[allow(unused)] // TODO: For development.
 mod wgpu_context;
 
-use bucketer::{Bucketer, GpuLine, Line, P2};
+use beamline::{Line, Renderer, P2};
 use cfg_if::cfg_if;
 use frame_timer::FrameTimer;
 use log::{trace, warn, LevelFilter};
-use std::sync::Arc;
+use std::{
+    cell::{RefCell, RefMut},
+    sync::Arc,
+};
 use wgpu::{util::DeviceExt, SurfaceConfiguration};
 use wgpu_context::{FutureWgpuContext, WgpuContext};
 use winit::{
@@ -59,44 +62,6 @@ fn run_app() -> Result<(), EventLoopError> {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform {
-    width: u32,
-    height: u32,
-    bucket_width: u32,
-    bucket_height: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Default, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceOffsets {
-    tile_x: u32,
-    tile_y: u32,
-    line_start_index: u32,
-    line_count: u32,
-}
-
-fn create_lines_and_instance_offsets(bucketer: &Bucketer) -> (Vec<InstanceOffsets>, Vec<GpuLine>) {
-    let mut cur_line_start_index: u32 = 0;
-    let mut instance_offsets_vec: Vec<InstanceOffsets> = Vec::new();
-    let mut line_vec: Vec<GpuLine> = Vec::new();
-    for ((tile_x, tile_y), bucket_lines) in bucketer.buckets() {
-        let instance_offsets = InstanceOffsets {
-            tile_x: *tile_x,
-            tile_y: *tile_y,
-            line_start_index: cur_line_start_index,
-            line_count: bucket_lines.len() as u32,
-        };
-        cur_line_start_index += bucket_lines.len() as u32;
-        let mut gpu_lines: Vec<GpuLine> =
-            bucket_lines.iter().map(|line| line.to_gpu_line()).collect();
-        instance_offsets_vec.push(instance_offsets);
-        line_vec.append(&mut gpu_lines);
-    }
-    (instance_offsets_vec, line_vec)
-}
-
 #[derive(Debug, Default)]
 pub struct App {
     /// Frame timer.
@@ -109,18 +74,8 @@ pub struct App {
     extra_wgpu_setup_completed: bool,
     /// Surface configuration for WGPU.
     surface_configuration: Option<wgpu::SurfaceConfiguration>,
-    /// Render pipeline for WGPU.
-    render_pipeline: Option<wgpu::RenderPipeline>,
-    /// Layout for the camera bind group.
-    camera_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    /// Camera uniform buffer.
-    camera_buffer: Option<wgpu::Buffer>,
-    /// Layout for the instance offsets bind group.
-    instance_layout: Option<wgpu::BindGroupLayout>,
-    /// Instance offsets buffer.
-    instance_offsets_buffer: Option<wgpu::Buffer>,
-    /// Lines buffer.
-    lines_buffer: Option<wgpu::Buffer>,
+    /// Beamline renderer.
+    beamline_renderer: Option<RefCell<Renderer>>,
 }
 impl App {
     /// Override the application logging level.
@@ -138,13 +93,13 @@ impl App {
     };
 
     /// Size of a rendering bucket.
-    const BUCKET_SIZE: u32 = 128;
+    const TILE_SIZE: u32 = 16;
 
     /// Maximum number of instance offsets (ie. number of drawn buckets).
     ///
     /// This sets the size of the buffer containing instance offsets.
     const MAX_INSTANCE_OFFSETS: u64 =
-        (3640 / App::BUCKET_SIZE as u64) * (2160 / App::BUCKET_SIZE as u64);
+        (3640 / App::TILE_SIZE as u64) * (2160 / App::TILE_SIZE as u64);
 
     /// Maximum number of line segments in buckets.
     ///
@@ -158,51 +113,6 @@ impl App {
         } else {
             const BACKENDS: wgpu::Backends = wgpu::Backends::PRIMARY;
         }
-    }
-
-    /// TEMPORARY: Bucketed lines.
-    fn example_bucketer(screen_width: u32, screen_height: u32, width: f32) -> Bucketer {
-        let mut bucketer = Bucketer::new(
-            screen_width,
-            screen_height,
-            App::BUCKET_SIZE,
-            App::BUCKET_SIZE,
-        );
-        let z = 200.0;
-        let q = 1200.0;
-        let core_width = width / 20.0;
-        let glow_width = width;
-        bucketer.add_line(Line {
-            start: P2::new(z, z),
-            end: P2::new(z + q, z),
-            core_width,
-            glow_width,
-        });
-        bucketer.add_line(Line {
-            start: P2::new(z + q, z),
-            end: P2::new(z + q, z + q),
-            core_width,
-            glow_width,
-        });
-        bucketer.add_line(Line {
-            start: P2::new(z + q, z + q),
-            end: P2::new(z, z + q),
-            core_width,
-            glow_width,
-        });
-        bucketer.add_line(Line {
-            start: P2::new(z, z + q),
-            end: P2::new(z, z),
-            core_width,
-            glow_width,
-        });
-        bucketer.add_line(Line {
-            start: P2::new(z, z),
-            end: P2::new(z + q, z + q),
-            core_width,
-            glow_width,
-        });
-        bucketer
     }
 
     /// Return a mutable reference to the frame timer.
@@ -271,6 +181,7 @@ impl App {
         let surface_caps = ctx.surface().get_capabilities(ctx.adapter());
 
         // find an sRGB surface
+        /*
         let surface_format = surface_caps
             .formats
             .iter()
@@ -283,6 +194,8 @@ impl App {
                 );
                 surface_caps.formats[0]
             });
+            */
+        let surface_format = wgpu::TextureFormat::Bgra8Unorm;
         trace!("Surface format: {:?}", surface_format);
 
         let size = self.window().inner_size();
@@ -312,185 +225,23 @@ impl App {
         self.surface_configuration.as_mut().unwrap()
     }
 
-    /// Set up the render pipeline.
-    fn create_render_pipeline(&mut self) {
-        let ctx = self.wgpu_context();
-        let device = ctx.device();
-
-        let shader_module_descriptor = wgpu::include_wgsl!("shader.wgsl");
-        let shader = device.create_shader_module(shader_module_descriptor);
-
-        // Camera bind group
-        let camera_layout_entry = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let camera_bind_group_layout_descriptor = wgpu::BindGroupLayoutDescriptor {
-            entries: &[camera_layout_entry],
-            label: Some("Camera Bind Group Layout"),
-        };
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&camera_bind_group_layout_descriptor);
-
-        // Instance offsets bind group
-        let instance_offsets_layout_entry = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let lines_layout_entry = wgpu::BindGroupLayoutEntry {
-            binding: 1,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let instance_layout_descriptor = wgpu::BindGroupLayoutDescriptor {
-            entries: &[instance_offsets_layout_entry, lines_layout_entry],
-            label: Some("Bind Group Layout for Instances"),
-        };
-        let instance_layout = device.create_bind_group_layout(&instance_layout_descriptor);
-
-        let pipeline_layout_descriptor = wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, &instance_layout],
-            push_constant_ranges: &[],
-        };
-        let render_pipeline_layout = device.create_pipeline_layout(&pipeline_layout_descriptor);
-        let vertex_state = wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        };
-        let color_target_state = wgpu::ColorTargetState {
-            format: self.surface_configuration().format,
-            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-            write_mask: wgpu::ColorWrites::ALL,
-        };
-        let fragment_state = wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(color_target_state)],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        };
-        let primitive_state = wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            unclipped_depth: false,
-            conservative: false,
-        };
-        let multisample_state = wgpu::MultisampleState {
-            count: 1,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        };
-        let render_pipeline_descriptor = wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: vertex_state,
-            fragment: Some(fragment_state),
-            primitive: primitive_state,
-            depth_stencil: None,
-            multisample: multisample_state,
-            multiview: None,
-            cache: None,
-        };
-        let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
-
-        self.camera_bind_group_layout = Some(camera_bind_group_layout);
-        self.instance_layout = Some(instance_layout);
-        self.render_pipeline = Some(render_pipeline);
-    }
-
-    /// Return a reference to the WGPU RenderPipeline.
-    fn render_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.render_pipeline.as_ref().unwrap()
-    }
-
-    /// Create the camera buffer; large enough to contain one CameraUniform.
-    fn create_camera_buffer(&mut self) {
-        let camera_uniform: [CameraUniform; 1] = [Default::default()];
+    /// Create the beamline line renderer.
+    fn create_beamline_renderer(&mut self) {
         let device = self.wgpu_context().device();
-        let buffer_init_descriptor = wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Buffer: View Parameters"),
-            contents: bytemuck::cast_slice(&camera_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        };
-        let camera_buffer = device.create_buffer_init(&buffer_init_descriptor);
-        self.camera_buffer = Some(camera_buffer);
+        let size = self.window().inner_size();
+        let renderer = Renderer::new(
+            device,
+            size.width,
+            size.height,
+            App::TILE_SIZE,
+            App::TILE_SIZE,
+        );
+        self.beamline_renderer = Some(RefCell::new(renderer));
     }
 
-    /// Return the camera buffer.
-    fn camera_buffer(&self) -> &wgpu::Buffer {
-        self.camera_buffer.as_ref().unwrap()
-    }
-
-    /// Create the instance offsets buffer.
-    fn create_instance_offsets_buffer(&mut self) {
-        let buffer_size_bytes = (App::MAX_INSTANCE_OFFSETS as wgpu::BufferAddress)
-            * (std::mem::size_of::<InstanceOffsets>() as wgpu::BufferAddress);
-        let device = self.wgpu_context().device();
-        let buffer_descriptor = wgpu::BufferDescriptor {
-            label: Some("Instance Offsets Buffer"),
-            size: buffer_size_bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        };
-        let instance_offsets_buffer = device.create_buffer(&buffer_descriptor);
-        self.instance_offsets_buffer = Some(instance_offsets_buffer);
-    }
-
-    /// Return the instance offsets buffer.
-    fn instance_offsets_buffer(&self) -> &wgpu::Buffer {
-        self.instance_offsets_buffer.as_ref().unwrap()
-    }
-
-    /// Create the lines buffer.
-    fn create_lines_buffer(&mut self) {
-        let buffer_size_bytes = (App::MAX_LINES as wgpu::BufferAddress)
-            * (std::mem::size_of::<GpuLine>() as wgpu::BufferAddress);
-        let device = self.wgpu_context().device();
-        let buffer_descriptor = wgpu::BufferDescriptor {
-            label: Some("Lines Buffer"),
-            size: buffer_size_bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        };
-        let lines_buffer = device.create_buffer(&buffer_descriptor);
-        self.lines_buffer = Some(lines_buffer);
-    }
-
-    /// Return the lines buffer.
-    fn lines_buffer(&self) -> &wgpu::Buffer {
-        self.lines_buffer.as_ref().unwrap()
-    }
-
-    /// Return the layout of the camera bind group.
-    fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        self.camera_bind_group_layout.as_ref().unwrap()
-    }
-
-    /// Return the layout of the instance bind group.
-    fn instance_layout(&self) -> &wgpu::BindGroupLayout {
-        self.instance_layout.as_ref().unwrap()
+    /// Return a reference to the beamline renderer.
+    fn beamline_renderer(&self) -> &RefCell<Renderer> {
+        self.beamline_renderer.as_ref().unwrap()
     }
 
     /// Configure the surface post-resize. This sets the size of the surface.
@@ -502,6 +253,7 @@ impl App {
         }
         let size = self.window().inner_size();
         if size.width > 0 && size.height > 0 {
+            // Resize the surface
             {
                 let cfg = self.surface_configuration_mut();
                 cfg.width = size.width;
@@ -509,7 +261,12 @@ impl App {
             }
             let ctx = self.wgpu_context();
             ctx.surface()
-                .configure(ctx.device(), self.surface_configuration())
+                .configure(ctx.device(), self.surface_configuration());
+
+            // Resize the beamline renderer
+            self.beamline_renderer()
+                .borrow_mut()
+                .resize(size.width, size.height);
         }
         trace!("Configured surface size: {:?}", size);
     }
@@ -523,11 +280,8 @@ impl App {
             if self.optional_wgpu_context().is_some() {
                 // Perform extra WGPU setup.
                 self.choose_surface_configuration();
-                self.create_render_pipeline();
-                self.create_camera_buffer();
-                self.create_instance_offsets_buffer();
-                self.create_lines_buffer();
                 self.frame_timer = Some(FrameTimer::new());
+                self.create_beamline_renderer();
                 self.extra_wgpu_setup_completed = true;
                 self.resize();
             } else {
@@ -549,103 +303,41 @@ impl App {
 
         // Frame timer
         let _tsec = self.frame_timer().total_time_secs_f64();
-        let _millis = self.frame_timer().tick_millis();
+        let millis = self.frame_timer().tick_millis();
+        println!("Frame time: {} ms", millis);
 
         let ctx = self.wgpu_context();
         let device = ctx.device();
+        let queue = ctx.queue();
+        let surface = ctx.surface();
 
         // get_current_texture will block when in FIFO present mode.
-        let output_texture = ctx.surface().get_current_texture()?;
+        let output_texture = surface.get_current_texture()?;
         let view = output_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder =
-            self.wgpu_context()
-                .device()
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Command Encoder"),
-                });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Command Encoder"),
+        });
 
-        // Set up the camera buffer.
-        let size = self.window().inner_size();
-        let camera_uniform = CameraUniform {
-            width: size.width,
-            height: size.height,
-            bucket_width: App::BUCKET_SIZE,
-            bucket_height: App::BUCKET_SIZE,
-        };
-        ctx.queue()
-            .write_buffer(self.camera_buffer(), 0, bytemuck::bytes_of(&camera_uniform));
-
-        // let line_width = 128.0 * (tsec.sin() + 1.0 + 0.1) as f32;
-        let line_width = 128.0;
-
-        let bucketer = App::example_bucketer(size.width, size.height, line_width);
-        let (instance_offsets, lines) = create_lines_and_instance_offsets(&bucketer);
-        // Set up the instance offsets buffer.
-        ctx.queue().write_buffer(
-            self.instance_offsets_buffer(),
-            0,
-            bytemuck::cast_slice(&instance_offsets),
+        // TODO: Remove.
+        // Add an example line.
+        self.beamline_renderer().borrow_mut().line(
+            Line::new(P2::new(100.0, 100.0), P2::new(800.0, 800.0)),
+            &beamline::LineStyle {
+                width: 50.0,
+                cap: beamline::LineCap::Round,
+                color: beamline::Color::new(0.5, 0.9, 0.5, 1.0),
+            },
         );
-        // Set up the lines buffer.
-        ctx.queue()
-            .write_buffer(self.lines_buffer(), 0, bytemuck::cast_slice(&lines));
 
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: self.camera_bind_group_layout(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.camera_buffer().as_entire_binding(),
-            }],
-            label: Some("Camera Bind Group"),
-        });
+        // Render to the surface from the beamline renderer.
+        self.beamline_renderer()
+            .borrow_mut()
+            .render(device, &mut encoder, queue, &view);
 
-        let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: self.instance_layout(),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.instance_offsets_buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.lines_buffer().as_entire_binding(),
-                },
-            ],
-            label: Some("Instance Bind Group"),
-        });
-
-        {
-            let rpca = wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(App::BACKGROUND_COLOR),
-                    store: wgpu::StoreOp::Store,
-                },
-            };
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(rpca)],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-
-            render_pass.set_pipeline(self.render_pipeline());
-            render_pass.set_bind_group(0, &camera_bind_group, &[]);
-            render_pass.set_bind_group(1, &instance_bind_group, &[]);
-
-            let n_instances = instance_offsets.len() as u32;
-            render_pass.draw(0..6, 0..n_instances); // 6 vertices
-        }
-
-        self.wgpu_context()
-            .queue()
-            .submit(std::iter::once(encoder.finish()));
+        queue.submit(std::iter::once(encoder.finish()));
         output_texture.present();
 
         Ok(())

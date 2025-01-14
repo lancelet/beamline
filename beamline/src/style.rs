@@ -86,7 +86,6 @@ impl StyledLine {
             self.line.end() + ovp,
             self.line.end() + ovn,
         ]);
-        assert!(polygon.is_simple(f32::EPSILON) && polygon.is_convex());
 
         polygon
     }
