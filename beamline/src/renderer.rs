@@ -67,7 +67,7 @@ impl Renderer {
             tile_height,
             tiler,
             antialias_width: 1.55,
-            draw_tiles: true,
+            draw_tiles: false,
             tile_background: Color::new(0.2, 0.2, 0.3, 0.7),
             tile_edges: Color::new(1.0, 1.0, 1.0, 0.7),
             render_pipeline,

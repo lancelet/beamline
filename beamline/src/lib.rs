@@ -1,6 +1,5 @@
 mod bbox;
 mod buffers;
-mod compare;
 mod interval;
 mod line;
 mod polygon;

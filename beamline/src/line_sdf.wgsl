@@ -93,20 +93,12 @@ struct VertexOutput {
     // Convert position from framebuffer coordinates to "beamline" coordinates.
     let p = framebuffer_to_beamline(in.position.xy);
 
-    // Compute the SDF union of all lines in the tile.
-    let closest_line = sdf_all_lines(
+    // Compute the line foreground color by rendering all lines in the tile.
+    let fg_color = render_all_lines(
         tile_info.start_index,
         tile_info.n_lines,
         p
     );
-    let line = lines[closest_line.line_index];
-
-    // Compute the line foreground color.
-    let line_amount = line_factor(
-        shader_options.antialias_width,
-        closest_line.sdf_value
-    );
-    let fg_color = vec4f(line.color.xyz, line.color.w * line_amount);
 
     // Compute the tile background color.
     //
@@ -222,7 +214,7 @@ fn alpha_over(
 ) -> vec4f {
     let a_alpha = a.w;
     let b_alpha = b.w;
-    let out_alpha = a_alpha + b_alpha * (1.0 - a_alpha);
+    let out_alpha = clamp(a_alpha + b_alpha * (1.0 - a_alpha), 0.0, 1.0);
 
     return vec4f(
         alpha_over_channel(a_alpha, b_alpha, out_alpha, a.x, b.x),
@@ -252,7 +244,7 @@ fn alpha_over_channel(
     a_comp    : f32,
     b_comp    : f32
 ) -> f32 {
-    return (a_comp * a_alpha + b_comp * b_alpha * (1 - a_alpha)) / out_alpha;
+    return (a_comp * a_alpha + b_comp * b_alpha * (1.0 - a_alpha)) / out_alpha;
 }
 
 /// Returns the shortest distance to the edge of a tile in uv space.
@@ -295,25 +287,38 @@ fn line_factor(
     return 1.0 - smoothstep(-aw2, aw2, dist);
 }
 
-/// Find the SDF union of all lines at the current tile.
+/// Render all lines in a tile.
 ///
-/// The SDF union is the minimum distance between all SDFs.
-fn sdf_all_lines(
+/// Tiles are rendered from bottom to top, compositing them over each other.
+///
+/// # Globals Used
+///
+/// - `lines`
+///
+/// # Parameters
+///
+/// - `start_index`: Start index of lines in the tile.
+/// - `n_lines`: Number of lines in the tile.
+/// - `p`: Current position.
+fn render_all_lines(
     start_index : u32,
     n_lines     : u32,
     p           : vec2f
-) -> ClosestLine {
+) -> vec4f {
+    var color = vec4f(0.0, 0.0, 0.0, 0.0);
     let end_index: u32 = start_index + n_lines;
-    var min_dist: f32 = sdf_styled_line(lines[start_index], p);
-    var min_idx: u32 = start_index;
-    for (var i: u32 = start_index + 1; i < end_index; i = i + 1) {
-        let dist = sdf_styled_line(lines[i], p);
-        if (dist < min_dist) {
-            min_dist = dist;
-            min_idx  = i;
+    for (var i: u32 = start_index; i < end_index; i = i + 1) {
+        let line = lines[i];
+        let line_alpha_mul = line_factor(
+            shader_options.antialias_width,
+            sdf_styled_line(line, p)
+        );
+        let line_color = vec4f(line.color.xyz, line.color.w * line_alpha_mul);
+        if (line_color.w > THRESHOLD_MIN_ALPHA) {
+            color = alpha_over(line_color, color);
         }
     }
-    return ClosestLine(min_idx, min_dist);
+    return color;
 }
 
 /// Returns the signed distance function for a styled line.
@@ -428,6 +433,9 @@ const END_CAP_SQUARE : u32 = 3;
 
 /// Width of edges drawn on the tiles.
 const TILE_EDGE_WIDTH : f32 = 3.0;
+
+/// Threshold below which alpha is considered to be zero.
+const THRESHOLD_MIN_ALPHA : f32 = 0.001;
 
 /// Basic coordinates for a tile.
 ///

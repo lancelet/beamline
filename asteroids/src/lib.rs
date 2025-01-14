@@ -290,7 +290,7 @@ impl App {
         }
 
         // Frame timer
-        let _tsec = self.frame_timer().total_time_secs_f64();
+        let tsec = self.frame_timer().total_time_secs_f64();
         let millis = self.frame_timer().tick_millis();
         println!("Frame time: {} ms", millis);
 
@@ -310,29 +310,31 @@ impl App {
         });
 
         // TODO: Remove.
-        // Add example lines.
+        let width = 100.0 * (0.95 * (tsec * 1.5).sin() as f32 + 1.0);
+        let alpha = 1.0; // 0.5 * (0.3 * (tsec * 7.0).sin() as f32 + 1.0);
+                         // Add example lines.
         self.beamline_renderer().borrow_mut().line(
             Line::new(P2::new(100.0, 100.0), P2::new(800.0, 100.0)),
             &beamline::LineStyle {
-                width: 100.0,
+                width,
                 cap: beamline::LineCap::Round,
-                color: beamline::Color::new(0.9, 0.4, 0.4, 1.0),
+                color: beamline::Color::new(0.9, 0.4, 0.4, alpha),
             },
         );
         self.beamline_renderer().borrow_mut().line(
             Line::new(P2::new(100.0, 160.0), P2::new(800.0, 160.0)),
             &beamline::LineStyle {
-                width: 100.0,
+                width,
                 cap: beamline::LineCap::Square,
-                color: beamline::Color::new(0.4, 0.9, 0.4, 1.0),
+                color: beamline::Color::new(0.4, 0.9, 0.4, alpha),
             },
         );
         self.beamline_renderer().borrow_mut().line(
             Line::new(P2::new(100.0, 220.0), P2::new(800.0, 220.0)),
             &beamline::LineStyle {
-                width: 100.0,
+                width,
                 cap: beamline::LineCap::Butt,
-                color: beamline::Color::new(0.4, 0.4, 0.9, 1.0),
+                color: beamline::Color::new(0.4, 0.4, 0.9, alpha),
             },
         );
 

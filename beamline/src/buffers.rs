@@ -1,6 +1,5 @@
-use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
-
 use crate::{style, tiler, Color};
+use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
 
 #[derive(Debug)]
 pub struct Buffers {

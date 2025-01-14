@@ -31,7 +31,7 @@ impl Color {
             red,
             green,
             blue,
-            alpha,
+            alpha: alpha.clamp(0.0, 1.0),
         }
     }
 
