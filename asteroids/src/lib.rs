@@ -8,11 +8,8 @@ use beamline::{Line, Renderer, P2};
 use cfg_if::cfg_if;
 use frame_timer::FrameTimer;
 use log::{trace, warn, LevelFilter};
-use std::{
-    cell::{RefCell, RefMut},
-    sync::Arc,
-};
-use wgpu::{util::DeviceExt, SurfaceConfiguration};
+use std::{cell::RefCell, sync::Arc};
+use wgpu::SurfaceConfiguration;
 use wgpu_context::{FutureWgpuContext, WgpuContext};
 use winit::{
     application::ApplicationHandler,
@@ -93,18 +90,7 @@ impl App {
     };
 
     /// Size of a rendering bucket.
-    const TILE_SIZE: u32 = 16;
-
-    /// Maximum number of instance offsets (ie. number of drawn buckets).
-    ///
-    /// This sets the size of the buffer containing instance offsets.
-    const MAX_INSTANCE_OFFSETS: u64 =
-        (3640 / App::TILE_SIZE as u64) * (2160 / App::TILE_SIZE as u64);
-
-    /// Maximum number of line segments in buckets.
-    ///
-    /// This sets the size of the buffer containing line segments.
-    const MAX_LINES: u64 = App::MAX_INSTANCE_OFFSETS * 4;
+    const TILE_SIZE: u32 = 32;
 
     cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
@@ -229,8 +215,10 @@ impl App {
     fn create_beamline_renderer(&mut self) {
         let device = self.wgpu_context().device();
         let size = self.window().inner_size();
+        let texture_format = self.surface_configuration().format;
         let renderer = Renderer::new(
             device,
+            texture_format,
             size.width,
             size.height,
             App::TILE_SIZE,
@@ -322,13 +310,29 @@ impl App {
         });
 
         // TODO: Remove.
-        // Add an example line.
+        // Add example lines.
         self.beamline_renderer().borrow_mut().line(
-            Line::new(P2::new(100.0, 100.0), P2::new(800.0, 800.0)),
+            Line::new(P2::new(100.0, 100.0), P2::new(800.0, 100.0)),
             &beamline::LineStyle {
-                width: 50.0,
+                width: 100.0,
                 cap: beamline::LineCap::Round,
-                color: beamline::Color::new(0.5, 0.9, 0.5, 1.0),
+                color: beamline::Color::new(0.9, 0.4, 0.4, 1.0),
+            },
+        );
+        self.beamline_renderer().borrow_mut().line(
+            Line::new(P2::new(100.0, 160.0), P2::new(800.0, 160.0)),
+            &beamline::LineStyle {
+                width: 100.0,
+                cap: beamline::LineCap::Square,
+                color: beamline::Color::new(0.4, 0.9, 0.4, 1.0),
+            },
+        );
+        self.beamline_renderer().borrow_mut().line(
+            Line::new(P2::new(100.0, 220.0), P2::new(800.0, 220.0)),
+            &beamline::LineStyle {
+                width: 100.0,
+                cap: beamline::LineCap::Butt,
+                color: beamline::Color::new(0.4, 0.4, 0.9, 1.0),
             },
         );
 

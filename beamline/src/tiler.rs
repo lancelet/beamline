@@ -8,7 +8,7 @@ use crate::{
     Line, P2, V2,
 };
 use itertools::Itertools;
-use std::ops::{Range, RangeInclusive};
+use std::ops::RangeInclusive;
 
 /// Tiler: Assigns lines to a regular grid of tiles.
 ///

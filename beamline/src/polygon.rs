@@ -1,8 +1,6 @@
 //! 2D polygons.
 
-use super::{types::P2, Line};
-use crate::V2;
-use crate::{bbox::Bbox, interval::Interval};
+use crate::{bbox::Bbox, interval::Interval, P2, V2};
 use cgmath::InnerSpace;
 
 /// Closed polygon.
@@ -32,17 +30,6 @@ impl Polygon {
     pub fn new(vertices: Vec<P2>) -> Self {
         assert!(vertices.len() >= 3);
         Polygon { vertices }
-    }
-
-    /// Construct all edges of the polygon.
-    ///
-    /// This returns an iterator which will produce all the lines that are the
-    /// edges of the polygon, drawn between its pairs of vertices.
-    pub fn edges(&self) -> impl Iterator<Item = Line> + use<'_> {
-        self.vertices
-            .iter()
-            .zip(self.vertices.iter().skip(1).chain(self.vertices.first()))
-            .map(|(a, b)| Line::new(a.clone(), b.clone()))
     }
 
     /// Check if a supplied axis is a "separating axis" for two polygons.

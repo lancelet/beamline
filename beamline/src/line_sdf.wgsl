@@ -23,9 +23,10 @@ struct Viewport {
 
 /// Shader Options
 struct ShaderOptions {
-    draw_tiles      : u32,
     tile_background : vec4f,
-    tile_edges      : vec4f
+    tile_edges      : vec4f,
+    antialias_width : f32,
+    draw_tiles      : u32
 };
 
 /// Tile Information
@@ -100,30 +101,34 @@ struct VertexOutput {
     );
     let line = lines[closest_line.line_index];
 
-    let antialias_width = 3.0; // TODO: Put in shader options.
+    // Compute the line foreground color.
+    let line_amount = line_factor(
+        shader_options.antialias_width,
+        closest_line.sdf_value
+    );
+    let fg_color = vec4f(line.color.xyz, line.color.w * line_amount);
 
-    let line_amount = line_factor(antialias_width, closest_line.sdf_value);
-    var line_color = line.color;
-    line_color.w = line_amount;
-
-    let bg_color_temp = vec4f(0.2, 0.2, 0.2, 1.0);
-
-    //return alpha_over(line_color, bg_color_temp);
-    /*
-    let c = (0.07 * closest_line.sdf_value) % 1.0;
-    if (closest_line.sdf_value < 0.0) {
-        return vec4f(c, 0.0, 0.0, 1.0);
-    } else {
-        return vec4f(0.0, c, 0.0, 1.0);
+    // Compute the tile background color.
+    //
+    // Mostly the tiles should be completely transparent, but we have some
+    // configuration in the shader to allow them to be filled for debugging
+    // and visualization purposes.
+    var bg_color = vec4f(0.0, 0.0, 0.0, 0.0);
+    if (shader_options.draw_tiles == 1) {
+        let edge_amount = line_factor(
+            shader_options.antialias_width,
+            tile_shortest_edge_distance_uv(in.uv) * f32(viewport.tile_width)
+            - TILE_EDGE_WIDTH
+        );
+        let edge_color = vec4f(
+            shader_options.tile_edges.xyx,
+            shader_options.tile_edges.w * edge_amount
+        );
+        bg_color = alpha_over(shader_options.tile_background, edge_color);
     }
-    */
-    if (closest_line.sdf_value < 0.0) {
-        let c = (0.07 * -closest_line.sdf_value) % 1.0;
-        return vec4f(c, 0.0, 0.0, 1.0);
-    } else {
-        let c = (0.07 * closest_line.sdf_value) % 1.0;
-        return vec4f(0.0, c, 0.0, 1.0);
-    }
+
+    // Alpha-composite the foreground line over any background tile color.
+    return alpha_over(fg_color, bg_color);
 }
 
 /**** FUNCTIONS **************************************************************/
@@ -250,12 +255,44 @@ fn alpha_over_channel(
     return (a_comp * a_alpha + b_comp * b_alpha * (1 - a_alpha)) / out_alpha;
 }
 
-/// TODO
+/// Returns the shortest distance to the edge of a tile in uv space.
+///
+/// # Parameters
+///
+/// - `uv`: uv coordinates.
+///
+/// # Returns
+///
+/// Shortest distance to the edge of the tile in uv space.
+fn tile_shortest_edge_distance_uv(uv: vec2f) -> f32 {
+     let min_x = min(uv.x, 1.0 - uv.x);
+     let min_y = min(uv.y, 1.0 - uv.y);
+     return min(min_x, min_y);
+}
+
+/// Performs antialiasing on the SDF at the edge of a line.
+///
+/// This function essentially performs:
+///   `if (dist < 0.0) { 1.0 } else { 0.0 }`
+/// But it uses antialiasing, with a smoothstep function.
+///
+/// This version splits antialiasing evenly on either side of the shape.
+///
+/// # Parameters
+///
+/// - `antialias_width`: Antialiasing width; the width of the smoothstep.
+/// - `dist`: Signed distance function value.
+///
+/// # Returns
+///
+/// Line edge step, but with antialiasing.
 fn line_factor(
     antialias_width : f32,
     dist            : f32
 ) -> f32 {
-    return smoothstep(-antialias_width, 0.0, dist);
+    let aw2 = antialias_width / 2.0;
+
+    return 1.0 - smoothstep(-aw2, aw2, dist);
 }
 
 /// Find the SDF union of all lines at the current tile.
@@ -297,21 +334,39 @@ fn sdf_styled_line(
     styled_line : StyledLine,
     p           : vec2f
 ) -> f32 {
+    let width_2 = styled_line.width / 2.0;
+
     // Switch operation depending on the end cap.
-    if (styled_line.cap == END_CAP_BUTT || styled_line.cap == END_CAP_SQUARE) {
-        // TODO
-        return 1000.0;
+    if (styled_line.cap == END_CAP_BUTT) {
+        return sdf_square_line(
+            styled_line.start,
+            styled_line.end,
+            width_2,
+            0.0,
+            p
+        );
+    } else if (styled_line.cap == END_CAP_SQUARE) {
+        return sdf_square_line(
+            styled_line.start,
+            styled_line.end,
+            width_2,
+            width_2,
+            p
+        );
     } else {
+        // END_CAP_ROUND, and fallback
         return sdf_rounded_line(
             styled_line.start,
             styled_line.end,
-            styled_line.width / 2.0,
+            width_2,
             p
         );
     }
 }
 
 /// Returns the signed distance function for a rounded line.
+///
+/// Based on: https://iquilezles.org/articles/distfunctions2d/
 ///
 /// # Parameters
 ///
@@ -337,12 +392,42 @@ fn sdf_rounded_line(
     return line_dist - radius;
 }
 
+/// Returns the signed distance function for a square-capped line.
+///
+/// Based on: https://iquilezles.org/articles/distfunctions2d/
+///
+/// TODO
+fn sdf_square_line(
+    start      : vec2f,
+    end        : vec2f,
+    half_width : f32,
+    extend     : f32,
+    p          : vec2f
+) -> f32 {
+    let v = end - start;
+    let a = length(v);
+    let d = v / a;
+    let l = a + 2.0 * extend;
+
+    //let a = start - extend * d;
+    // let b = end + extend * d;
+    //    l = l + 2.0 * extend;
+
+    var q = p - (start + end) / 2.0;
+        q = mat2x2f(d.x, -d.y, d.y, d.x) * q;
+        q = abs(q) - vec2f(0.5 * l, half_width);
+    return length(max(q, vec2f(0.0, 0.0))) + min(max(q.x, q.y), 0.0);
+}
+
 /**** CONSTANTS **************************************************************/
 
 /// Different types of end cap.
 const END_CAP_BUTT   : u32 = 1;
 const END_CAP_ROUND  : u32 = 2;
 const END_CAP_SQUARE : u32 = 3;
+
+/// Width of edges drawn on the tiles.
+const TILE_EDGE_WIDTH : f32 = 3.0;
 
 /// Basic coordinates for a tile.
 ///

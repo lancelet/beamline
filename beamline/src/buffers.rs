@@ -74,6 +74,7 @@ impl Buffers {
     /// # Parameters
     ///
     /// - `queue`: WGPU queue to enqueue the buffer write.
+    /// - `antialias_width`: Width of antialiasing smoothstep.
     /// - `draw_tiles`: `true` if individual tiles should be drawn for
     ///   visualization.
     /// - `tile_background`: tile background color.
@@ -81,14 +82,17 @@ impl Buffers {
     pub fn write_shader_options(
         &self,
         queue: &wgpu::Queue,
+        antialias_width: f32,
         draw_tiles: bool,
         tile_background: Color,
         tile_edges: Color,
     ) {
         let shader_options = ShaderOptions {
+            antialias_width,
             draw_tiles: if draw_tiles { 1 } else { 0 },
             tile_background: tile_background.as_array(),
             tile_edges: tile_edges.as_array(),
+            _padding: [0.0, 0.0],
         };
         queue.write_buffer(&self.shader_options_buffer, 0, bytes_of(&shader_options));
     }
@@ -246,9 +250,11 @@ struct Viewport {
 #[repr(C)]
 #[derive(Default, Debug, Copy, Clone, Pod, Zeroable)]
 struct ShaderOptions {
-    draw_tiles: u32,
-    tile_background: [f32; 4],
-    tile_edges: [f32; 4],
+    tile_background: [f32; 4], // 16 bytes
+    tile_edges: [f32; 4],      // 16 bytes
+    antialias_width: f32,      // 4 bytes
+    draw_tiles: u32,           // 4 bytes
+    _padding: [f32; 2],
 }
 
 /// GPU version of the tile info.
@@ -275,12 +281,12 @@ impl TileInfo {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct StyledLine {
-    start: [f32; 2],    // 8 bytes
-    end: [f32; 2],      // 8 bytes
-    width: f32,         // 4 bytes
-    cap: u32,           // 4 bytes
-    color: [f32; 4],    // 16 bytes
-    _padding: [f32; 2], // 8 bytes
+    start: [f32; 2],     // 8 bytes
+    end: [f32; 2],       // 8 bytes
+    width: f32,          // 4 bytes
+    cap: u32,            // 4 bytes
+    _padding0: [f32; 2], // 4 bytes
+    color: [f32; 4],     // 16 bytes
 }
 impl StyledLine {
     pub fn new_from_style_line(styled_line: style::StyledLine) -> Self {
@@ -289,8 +295,8 @@ impl StyledLine {
             end: [styled_line.line.end().x, styled_line.line.end().y],
             width: styled_line.style.width,
             cap: styled_line.style.cap as u32,
+            _padding0: [0.0, 0.0],
             color: styled_line.style.color.as_array(),
-            _padding: [0.0, 0.0],
         }
     }
 }

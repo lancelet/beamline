@@ -12,6 +12,7 @@ pub struct Renderer {
     tile_width: u32,
     tile_height: u32,
     tiler: Tiler,
+    antialias_width: f32,
     draw_tiles: bool,
     tile_background: Color,
     tile_edges: Color,
@@ -27,12 +28,14 @@ impl Renderer {
     /// # Parameters
     ///
     /// - `device`: WGPU Device for rendering.
+    /// - `texture_format`: WGPU texture format.
     /// - `area_width`: Width of the renderable area.
     /// - `area_height`: Height of the renderable area.
     /// - `tile_width`: Width of a single bucketing tile.
     /// - `tile_height`: Height of a single bucketing tile.
     pub fn new(
         device: &wgpu::Device,
+        texture_format: wgpu::TextureFormat,
         area_width: u32,
         area_height: u32,
         tile_width: u32,
@@ -49,7 +52,8 @@ impl Renderer {
         let tiler = Tiler::new(area_width, area_height, tile_width, tile_height);
         let viewport_layout = create_viewport_layout(device);
         let tile_layout = create_tile_layout(device);
-        let render_pipeline = create_render_pipeline(device, &viewport_layout, &tile_layout);
+        let render_pipeline =
+            create_render_pipeline(device, texture_format, &viewport_layout, &tile_layout);
         let buffers = Buffers::new(
             device,
             DEFAULT_TILE_INFO_CAPACITY,
@@ -62,9 +66,10 @@ impl Renderer {
             tile_width,
             tile_height,
             tiler,
-            draw_tiles: false,
-            tile_background: Color::new(0.0, 0.0, 0.0, 0.0),
-            tile_edges: Color::new(0.0, 0.0, 0.0, 0.0),
+            antialias_width: 1.55,
+            draw_tiles: true,
+            tile_background: Color::new(0.2, 0.2, 0.3, 0.7),
+            tile_edges: Color::new(1.0, 1.0, 1.0, 0.7),
             render_pipeline,
             viewport_layout,
             tile_layout,
@@ -133,6 +138,7 @@ impl Renderer {
         // Set up the shader options.
         self.buffers.write_shader_options(
             queue,
+            self.antialias_width,
             self.draw_tiles,
             self.tile_background,
             self.tile_edges,
@@ -199,11 +205,22 @@ impl Renderer {
             render_pass.draw(0..6, 0..n_instances);
         }
     }
+
+    /// Set whether debugging tiles should be draw.
+    ///
+    /// If this is set to `true`, then the shader for lines will render a
+    /// background to the scaffolding tiles that provide the geometry for
+    /// the lines. This can help in debugging by making the scaffolding
+    /// tiles visible.
+    pub fn set_draw_tiles(&mut self, value: bool) {
+        self.draw_tiles = value;
+    }
 }
 
 /// Create the render pipeline.
 fn create_render_pipeline(
     device: &wgpu::Device,
+    texture_format: wgpu::TextureFormat,
     viewport_layout: &wgpu::BindGroupLayout,
     tile_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
@@ -228,7 +245,7 @@ fn create_render_pipeline(
             module: &shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Bgra8Unorm, // TODO
+                format: texture_format,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
