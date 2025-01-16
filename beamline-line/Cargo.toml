@@ -1,25 +1,19 @@
 [package]
-name = "beamline"
+name = "beamline-line"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
-name = "beamline"
+name = "beamline_line"
 
 [dependencies]
 bytemuck = "1.21.0"
-cgmath = "0.18.0"
-itertools = "0.14.0"
 wgpu = "23.0.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "23.0.1", default-features = true, features = ["webgpu"] }
-
-[[bench]]
-name = "bench_tiling_lines"
-harness = false
 
 [dev-dependencies]
 proptest = "1.6.0"

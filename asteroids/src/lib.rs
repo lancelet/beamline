@@ -8,7 +8,7 @@ use beamline::{Line, Renderer, P2};
 use cfg_if::cfg_if;
 use frame_timer::FrameTimer;
 use log::{trace, warn, LevelFilter};
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, f32::consts::PI, sync::Arc};
 use wgpu::SurfaceConfiguration;
 use wgpu_context::{FutureWgpuContext, WgpuContext};
 use winit::{
@@ -337,6 +337,18 @@ impl App {
                 color: beamline::Color::new(0.4, 0.4, 0.9, alpha),
             },
         );
+        let frac = (tsec.sin() as f32 + 1.0) / 2.0;
+        let angle = PI / 2.0 * frac;
+        let end = P2::new(40.0 + 1024.0 * angle.cos(), 40.0 + 1024.0 * angle.sin());
+        self.beamline_renderer().borrow_mut().line(
+            Line::new(P2::new(40.0, 40.0), end),
+            &beamline::LineStyle {
+                width: 30.0,
+                cap: beamline::LineCap::Round,
+                color: beamline::Color::new(0.9, 0.4, 0.9, alpha),
+            },
+        );
+        self.beamline_renderer().borrow_mut().set_draw_tiles(true);
 
         // Render to the surface from the beamline renderer.
         self.beamline_renderer()

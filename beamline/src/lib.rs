@@ -1,12 +1,12 @@
-mod bbox;
-mod buffers;
-mod interval;
-mod line;
-mod polygon;
-mod renderer;
-mod style;
-mod tiler;
-mod types;
+pub mod bbox;
+pub mod buffers;
+pub mod interval;
+pub mod line;
+pub mod polygon;
+pub mod renderer;
+pub mod style;
+pub mod tiler;
+pub mod types;
 
 pub use line::Line;
 pub use renderer::Renderer;
