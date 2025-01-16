@@ -1,11 +1,22 @@
-use std::{mem::MaybeUninit, ops::Deref};
+use core::{mem::MaybeUninit, ops::Deref};
 
+/// `Stack` is a fixed-size, stack-like container.
+///
+/// `Stack` supports:
+///
+///   - Length queries: [`Stack::len`].
+///   - Pushing values onto to the end: [`Stack::push`].
+///   - Popping values from the end: [`Stack::pop`].
+///   - Clearing all values: [`Stack::clear`].
+///   - Viewing as a slice: (`&`).
+#[derive(Debug)]
 pub struct Stack<T, const N: usize> {
     elem: [MaybeUninit<T>; N],
     size: usize,
 }
 
 impl<T, const N: usize> Stack<T, N> {
+    /// Creates a new `Stack`.
     pub fn new() -> Self {
         Stack {
             elem: alloc_array(),
@@ -13,10 +24,27 @@ impl<T, const N: usize> Stack<T, N> {
         }
     }
 
+    /// Returns the length of the `Stack`.
+    ///
+    /// This is the number of items actually stored on the `Stack`, not its
+    /// capacity.
     pub fn len(&self) -> usize {
         self.size
     }
 
+    /// Pushes an item onto the end of the stack.
+    ///
+    /// If the stack has no more space, the `value` is dropped and an error
+    /// is returned.
+    ///
+    /// # Parameters
+    ///
+    /// - `value`: The value to push onto the stack.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: if there was enough space for the item on the stack.
+    /// - `Err(Error::CapacityExceeded)`: if the stack ran out of space.
     pub fn push(&mut self, value: T) -> Result<(), Error> {
         if self.size < N {
             unsafe {
@@ -29,6 +57,12 @@ impl<T, const N: usize> Stack<T, N> {
         }
     }
 
+    /// Pops an item off the end of the stack.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(value)`: if there was an item on the stack.
+    /// - `None`: if the stack was empty.
     pub fn pop(&mut self) -> Option<T> {
         if self.size > 0 {
             self.size -= 1;
@@ -41,6 +75,7 @@ impl<T, const N: usize> Stack<T, N> {
         }
     }
 
+    /// Clears the stack, removing and dropping all items.
     pub fn clear(&mut self) {
         unsafe {
             let initialized_slice = core::slice::from_raw_parts_mut(
@@ -52,6 +87,7 @@ impl<T, const N: usize> Stack<T, N> {
         self.size = 0;
     }
 
+    /// Dereference a `Stack` as a a slice.
     fn deref(&self) -> &[T] {
         unsafe {
             core::slice::from_raw_parts(
@@ -69,11 +105,15 @@ impl<T, const N: usize> Deref for Stack<T, N> {
     }
 }
 
+/// Errors for a [`Stack`].
 #[derive(Debug, PartialEq)]
 pub enum Error {
+    /// Error produced if an attempt is made to store more elements in a stack
+    /// than its capacity allows.
     CapacityExceeded,
 }
 
+/// Allocate an array of `MaybeUninit` values.
 fn alloc_array<T, const N: usize>() -> [MaybeUninit<T>; N] {
     [const { MaybeUninit::uninit() }; N]
 }
@@ -84,6 +124,56 @@ mod tests {
     use prop::{collection, sample::SizeRange};
     use proptest::prelude::*;
     use std::{fmt::Debug, sync::Arc};
+
+    ///---- Sanity Testing ----------------------------------------------------
+
+    // These sanity tests are just examples; not thorough testing. See below
+    // for more thorough property tests.
+
+    #[test]
+    fn stack_example() {
+        let mut stack = Stack::<u32, 3>::new();
+        assert_eq!(stack.len(), 0);
+        assert_eq!(stack.deref(), &[]);
+
+        let r1 = stack.push(42);
+        assert_eq!(r1, Ok(()));
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.deref(), &[42]);
+
+        let r2 = stack.push(10);
+        assert_eq!(r2, Ok(()));
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.deref(), &[42, 10]);
+
+        let r3 = stack.push(7);
+        assert_eq!(r3, Ok(()));
+        assert_eq!(stack.len(), 3);
+        assert_eq!(stack.deref(), &[42, 10, 7]);
+
+        let r4 = stack.push(3);
+        assert_eq!(r4, Err(Error::CapacityExceeded));
+        assert_eq!(stack.len(), 3);
+        assert_eq!(stack.deref(), &[42, 10, 7]);
+
+        let p1 = stack.pop();
+        assert_eq!(p1, Some(7));
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.deref(), &[42, 10]);
+
+        let p2 = stack.pop();
+        assert_eq!(p2, Some(10));
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.deref(), &[42]);
+
+        stack.clear();
+        assert_eq!(stack.len(), 0);
+
+        let r5 = stack.push(100);
+        assert_eq!(r5, Ok(()));
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.deref(), &[100]);
+    }
 
     ///---- Property Testing Stack --------------------------------------------
 
