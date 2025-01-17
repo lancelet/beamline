@@ -105,6 +105,12 @@ impl<T, const N: usize> Deref for Stack<T, N> {
     }
 }
 
+impl<T, const N: usize> Drop for Stack<T, N> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 /// Errors for a [`Stack`].
 #[derive(Debug, PartialEq)]
 pub enum Error {
