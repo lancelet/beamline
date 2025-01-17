@@ -206,14 +206,12 @@ where
             self.check_state();
         }
 
-        if self.view.take().is_some() {
+        if self.view.is_some() {
             self.finish_view();
         }
 
         self.encoder = None;
         self.buffer_byte_offset = 0;
-        self.view = None;
-        self.view_byte_offset = 0;
         self.item_count = 0;
         self.belt.finish();
 
@@ -311,6 +309,7 @@ where
         let cur_chunk_size_bytes = self.view.take().unwrap().len();
         self.buffer_byte_offset += cur_chunk_size_bytes;
 
+        self.view = None;
         self.view_byte_offset = 0;
         self.belt.finish();
     }
