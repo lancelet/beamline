@@ -194,7 +194,7 @@ where
     /// rendering.
     ///
     /// After the `CommandBuffer` returned by this operation is enqueued, the
-    /// [`PushBuf::recall`] function should be called.
+    /// [`PushBuf::recall`] function must be called.
     pub fn end_frame(&mut self) -> CommandBuffer {
         debug_assert!(self.state == State::InFrame);
         #[cfg(debug_assertions)]
@@ -223,10 +223,10 @@ where
     }
 
     /// Recalls buffers from the GPU after the `CommandBuffer` has been
-    /// enqueue.
+    /// enqueued.
     ///
     /// After the `CommandBuffer` returned by [`PushBuf::end_frame`] has been
-    /// enqueued, this function should be called. It requests the return of
+    /// enqueued, this method should be called. It requests the return of
     /// staging buffers from the GPU so that they can be mapped to host memory
     /// for the next frame.
     ///
@@ -294,7 +294,11 @@ where
         #[cfg(debug_assertions)]
         self.check_state();
 
-        self.view = None;
+        // Update the buffer offset to the start of the next chunk.
+        debug_assert!(self.view.is_some());
+        let cur_chunk_size_bytes = self.view.take().unwrap().len();
+        self.buffer_byte_offset += cur_chunk_size_bytes;
+
         self.view_byte_offset = 0;
         self.belt.finish();
     }
@@ -304,11 +308,11 @@ where
         debug_assert!(self.view.is_some());
         debug_assert!(self.chunk_size % size_of::<T>() == 0);
         debug_assert!(self.view_byte_offset < self.chunk_size);
-        debug_assert!(self.buffer_byte_offset < BUFFER_N);
+        debug_assert!(self.buffer_byte_offset < BUFFER_N * size_of::<T>());
         debug_assert!(self.item_count < BUFFER_N);
 
         let s = self.view_byte_offset;
-        let e = s + self.chunk_size;
+        let e = s + size_of::<T>();
         let buf_chunk: &mut [u8] = &mut (self.view.as_mut().unwrap())[s..e];
         debug_assert_eq!(buf_chunk.len(), size_of::<T>());
 
