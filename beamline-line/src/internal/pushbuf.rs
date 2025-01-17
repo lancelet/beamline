@@ -6,22 +6,51 @@ use wgpu::{
     CommandBuffer, CommandEncoder, CommandEncoderDescriptor, Device,
 };
 
-/// Efficient buffer to build up an array of `T` values.
+/// Efficient, chunked-copy buffer, to build up a GPU array of `T` values.
 ///
 /// In the line renderer, a common operation involves creating buffers for the
 /// GPU by appending values. `PushBuf` does this efficiently.
 ///
 /// # Constant Generic Parameters
 ///
-/// - `T`: The type of value stored in the `PushBuf` array.
-/// - `CHUNK_N`: The number of items of type `T` in a staging buffer.
+/// - `T`: The type of value stored in the array contained within the `PushBuf`
+///   buffer.
+/// - `CHUNK_N`: The number of items of type `T` in each staging buffer.
 /// - `BUFFER_N`: The total size of the buffer.
 ///
 /// # Lifecycle
 ///
+/// The lifecycle of `PushBuf` is as follows:
+///
+/// 1. Create a `PushBuf` using [`PushBuf::new`].
+/// 2. Call [`PushBuf::begin_frame`] to start each frame.
+/// 3. Append items within a frame using [`PushBuf::push`].
+/// 4. Finish the frame using [`PushBuf::end_frame`] and receive a
+///    `CommandBuffer` to be enqueued.
+/// 5. Use the [`PushBuf::buffer`] in a binding.
+/// 6. Enqueue the `CommandBuffer` (not a `PushBuf` method).
+/// 7. Call [`PushBuf::recall`] to fetch the staging belt buffers back from
+///    the GPU to host memory.
+/// 8. Go back to start the next frame.
+///
 /// # Internal Operation
 ///
-/// TODO
+/// The idea is simple: accumulate chunks of data in a staging buffer. When the
+/// staging buffer is full, queue a copy of that data to the main buffer.
+///
+/// Efficiency is gained through two means:
+///
+/// 1. Staging buffers are mapped to host memory. This means that, when you
+///    call [`PushBuf::push`], bytes are copied directly into a buffer
+///    which will be sent to the GPU. There is no additional intermediate
+///    buffer involved. (Although there is a copy from the staging buffer
+///    to the main buffer, that copy is done on the GPU.)
+///
+/// 2. Enough staging buffers are allocated by the `StagingBelt`, after the
+///    first few frames, that you can expect fresh buffers for the current
+///    frame to be mapped to host memory as soon as the frame begins
+///    processing.
+///
 pub struct PushBuf<T, const CHUNK_N: usize, const BUFFER_N: usize> {
     /// WGPU Device.
     device: Arc<Device>,
@@ -89,6 +118,12 @@ where
     /// Returns a reference to the underlying WGPU buffer.
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
+    }
+
+    /// Returns the number of items that have been pushed to the buffer in
+    /// the current frame.
+    pub fn len(&self) -> usize {
+        self.item_count
     }
 
     /// Begins rendering a frame.
@@ -165,7 +200,7 @@ where
         #[cfg(debug_assertions)]
         self.check_state();
 
-        if let Some(_) = self.view.take() {
+        if self.view.take().is_some() {
             self.finish_view();
         }
 
@@ -232,7 +267,7 @@ where
 
         // Create a view onto the staging buffer chunk.
         let view = self.belt.write_buffer(
-            &mut self.encoder.as_mut().unwrap(),
+            self.encoder.as_mut().unwrap(),
             &self.buffer,
             self.buffer_byte_offset as BufferAddress,
             chunk_size,
