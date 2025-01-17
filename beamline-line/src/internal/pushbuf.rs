@@ -132,9 +132,11 @@ where
     /// it creates a WGPU `CommandEncoder` to manage the buffer operations
     /// for this frame.
     pub fn begin_frame(&mut self) {
-        debug_assert!(self.state == State::Created);
         #[cfg(debug_assertions)]
-        self.check_state();
+        {
+            debug_assert!(self.state == State::Created);
+            self.check_state();
+        }
 
         self.encoder = Some(self.device.create_command_encoder(
             &CommandEncoderDescriptor {
@@ -158,9 +160,11 @@ where
     ///
     /// - `value`: The value to append to the buffer.
     pub fn push(&mut self, value: T) -> Result<(), Error> {
-        debug_assert!(self.state == State::InFrame);
         #[cfg(debug_assertions)]
-        self.check_state();
+        {
+            debug_assert!(self.state == State::InFrame);
+            self.check_state();
+        }
 
         // Check we haven't exceeded the buffer capacity.
         if self.item_count >= BUFFER_N {
@@ -196,9 +200,11 @@ where
     /// After the `CommandBuffer` returned by this operation is enqueued, the
     /// [`PushBuf::recall`] function must be called.
     pub fn end_frame(&mut self) -> CommandBuffer {
-        debug_assert!(self.state == State::InFrame);
         #[cfg(debug_assertions)]
-        self.check_state();
+        {
+            debug_assert!(self.state == State::InFrame);
+            self.check_state();
+        }
 
         if self.view.take().is_some() {
             self.finish_view();
@@ -234,9 +240,11 @@ where
     /// `CommandBuffer` has been enqueued, and MUST be called before the next
     /// [`PushBuf::begin_frame`] method is called.
     pub fn recall(&mut self) {
-        debug_assert!(self.state == State::PostFrame);
         #[cfg(debug_assertions)]
-        self.check_state();
+        {
+            debug_assert!(self.state == State::PostFrame);
+            self.check_state();
+        }
 
         self.belt.recall();
 
@@ -252,9 +260,11 @@ where
     /// This requests a staging buffer from the staging belt, and casts it
     /// to a `BufferViewMut<'static>`, into which we can write bytes.
     fn create_view(&mut self) {
-        debug_assert!(self.state == State::InFrame);
         #[cfg(debug_assertions)]
-        self.check_state();
+        {
+            debug_assert!(self.state == State::InFrame);
+            self.check_state();
+        }
         debug_assert!(self.view.is_none());
         debug_assert!(self.item_count < BUFFER_N);
 
@@ -290,9 +300,11 @@ where
     /// this releases the buffer back to the staging belt. The staging belt
     /// then releases it back to be copied to GPU memory.
     fn finish_view(&mut self) {
-        debug_assert!(self.state == State::InFrame);
         #[cfg(debug_assertions)]
-        self.check_state();
+        {
+            debug_assert!(self.state == State::InFrame);
+            self.check_state();
+        }
 
         // Update the buffer offset to the start of the next chunk.
         debug_assert!(self.view.is_some());
