@@ -10,6 +10,8 @@ name = "beamline_line"
 
 [dependencies]
 bytemuck = "1.21.0"
+futures = "0.3.31"
+rand = "0.8.5"
 wgpu = "23.0.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

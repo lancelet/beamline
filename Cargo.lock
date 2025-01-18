@@ -242,7 +242,9 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "criterion",
+ "futures",
  "proptest",
+ "rand",
  "wgpu",
 ]
 

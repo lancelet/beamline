@@ -25,7 +25,7 @@ use wgpu::{
 /// 3. Append items within a frame using [`PushBuf::push`].
 /// 4. Finish the frame using [`PushBuf::end_frame`] and receive a
 ///    `CommandBuffer` to be enqueued.
-/// 5. Use the [`PushBuf::buffer`] in a binding.
+/// 5. Use the [`PushBuf::buffer`] (for example, in a binding).
 /// 6. Enqueue the `CommandBuffer` (not a `PushBuf` method).
 /// 7. Call [`PushBuf::recall`] to fetch the staging belt buffers back from
 ///    the GPU to host memory.
@@ -221,7 +221,6 @@ where
             self.finish_view();
         }
 
-        self.encoder = None;
         self.buffer_byte_offset = 0;
         self.item_count = 0;
         self.belt.finish();
@@ -381,6 +380,7 @@ where
 }
 
 /// Errors which can be produced by `PushBuf`.
+#[derive(Debug, PartialEq)]
 pub enum Error {
     /// The capacity of the buffer would be exceeded.
     CapacityExceeded,
@@ -418,4 +418,137 @@ enum State {
     Created,
     InFrame,
     PostFrame,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal::tests::gpu::Gpu;
+    use bytemuck::cast_slice;
+    use futures::{channel::oneshot, executor::block_on, future::try_join_all};
+    use proptest::prelude::*;
+    use rand::prelude::*;
+    use wgpu::{util::DownloadBuffer, BufferSlice, Maintain, MapMode};
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        /// Test `PushBuf` over multiple frames.
+        ///
+        /// This test effectively round-trips data to the GPU using a `PushBuf`.
+        /// In this test, we run for multiple frames. We create a test `Vec` of
+        /// data for each of the frames (`in_data`). Inside the frame, we feed
+        /// that frame's test `Vec` to a `PushBuf`. Then we copy the `PushBuf`
+        /// output into an output buffer for that frame (`out_buffers`). After
+        /// all the frames have completed, we map the `out_buffers` back to the
+        /// CPU and compare them to make sure they match the `in_data`.
+        #[test]
+        fn test_pushbuf_multiframe(
+            seed in u64::MIN..u64::MAX,
+            n_frames in 1usize..24usize,
+            buffer_item_capacity in 1usize..512,
+            max_chunk_item_capacity in 1usize..512,
+            max_n_items in 1usize..512
+        ) {
+            let chunk_item_capacity =
+                max_chunk_item_capacity.min(buffer_item_capacity);
+            let n_items =
+                max_n_items.min(buffer_item_capacity);
+
+            // Set up the GPU for this test.
+            let gpu = Gpu::new();
+            let mut pushbuf = PushBuf::<u64>::new(
+                gpu.device.clone(),
+                Some("Test PushBuf"),
+                BufferUsages::COPY_SRC,
+                buffer_item_capacity,
+                chunk_item_capacity
+            );
+
+            // Create random data for all frames.
+            let in_data: Vec<Vec<u64>> = {
+                let mut rng = StdRng::seed_from_u64(seed);
+                (0..n_frames)
+                    .map(|_| (0..n_items).map(|_| rng.gen::<u64>()).collect())
+                    .collect()
+            };
+
+            // Create one buffer per frame to receive data back from the GPU.
+            let out_buffers: Vec<Buffer> =
+                (0..n_frames)
+                    .map(|i| create_buffer::<u64>(
+                        gpu.device.clone(),
+                        Some(&format!("Test Output Buffer {}", i)),
+                        BufferUsages::MAP_READ,
+                        n_items
+                    )).collect();
+
+            // Run through the frames, pushing data into the PushBuf, and
+            // copying the data to the `out_buffers[i]` for each frame.
+            for frame in 0..n_frames {
+                // Put the data into the push buffer.
+                pushbuf.begin_frame();
+                let frame_data = &in_data[frame];
+                frame_data
+                    .iter()
+                    .for_each(|x| {
+                        let result = pushbuf.push(*x);
+                        assert_eq!(result, Ok(()));
+                    });
+                let command_buffer = pushbuf.end_frame();
+
+                // Copy data from the push buffer's destination buffer to the
+                // output buffer for the test.
+                let mut copy_command_encoder =
+                    gpu.device.create_command_encoder(
+                        &CommandEncoderDescriptor {
+                            label: Some(&format!("Test Copy Frame {}", frame))
+                        }
+                    );
+                copy_command_encoder.copy_buffer_to_buffer(
+                    pushbuf.buffer(),
+                    0,
+                    &out_buffers[frame],
+                    0,
+                    (n_items * size_of::<u64>()) as BufferAddress
+                );
+                let copy_command = copy_command_encoder.finish();
+
+                // Queue both operations for this frame.
+                gpu.queue.submit([command_buffer, copy_command]);
+
+                // Recall the push buffer.
+                pushbuf.recall();
+            }
+
+            // Map all the output buffers back to the CPU, so that we can
+            // check they received the correct data.
+            let buffer_slices: Vec<BufferSlice<'_>> =
+                out_buffers.iter().map(|buf| buf.slice(..)).collect();
+            let receivers: Vec<oneshot::Receiver<()>> =
+                buffer_slices
+                    .iter()
+                    .map(|slice| {
+                        let(sender, receiver) = oneshot::channel();
+                        slice
+                            .map_async(
+                                MapMode::Read,
+                                |result| sender.send(result.unwrap()).unwrap()
+                            );
+                        receiver
+                    })
+            .collect();
+            let _ = gpu.device.poll(Maintain::Wait);  // Triggers mapping.
+            _ = block_on(async{ try_join_all(receivers).await.unwrap() });
+
+            // Check the data in the output buffers. It must match the input
+            // data we fed to the PushBuf.
+            for (in_data, slice) in in_data.iter().zip(buffer_slices.iter()) {
+                let buf_bytes: &[u8] = &slice.get_mapped_range();
+                let buf_u64s: &[u64] = cast_slice(buf_bytes);
+                assert_eq!(buf_u64s, in_data);
+            }
+
+        }
+    }
 }
