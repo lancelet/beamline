@@ -15,8 +15,6 @@ use wgpu::{
 ///
 /// - `T`: The type of value stored in the array contained within the `PushBuf`
 ///   buffer.
-/// - `CHUNK_N`: The number of items of type `T` in each staging buffer.
-/// - `BUFFER_N`: The total size of the buffer.
 ///
 /// # Lifecycle
 ///
@@ -51,13 +49,15 @@ use wgpu::{
 ///    frame to be mapped to host memory as soon as the frame begins
 ///    processing.
 ///
-pub struct PushBuf<T, const CHUNK_N: usize, const BUFFER_N: usize> {
+pub struct PushBuf<T> {
     /// WGPU Device.
     device: Arc<Device>,
     /// Command encoder for a frame. Between frames, this will be `None`.
     encoder: Option<CommandEncoder>,
     /// WGPU Buffer we ultimately copy our values into.
     buffer: Buffer,
+    /// Number of items of type `T` that can fit in the buffer.
+    buffer_item_capacity: usize,
     /// Byte offset in `buffer` for the next chunk.
     buffer_byte_offset: usize,
     /// View into the staging buffer (NOT `buffer` above), obtained from the
@@ -69,16 +69,15 @@ pub struct PushBuf<T, const CHUNK_N: usize, const BUFFER_N: usize> {
     item_count: usize,
     /// The staging belt which produces staging buffers.
     belt: StagingBelt,
-    /// Size of a chunk buffer from the staging belt.
-    chunk_size: usize,
+    /// Number of items of type `T` that can fit in a chunk.
+    chunk_item_capacity: usize,
     /// Debugging state.
     #[cfg(debug_assertions)]
     state: State,
     _phantom: PhantomData<T>,
 }
 
-impl<T, const CHUNK_N: usize, const BUFFER_N: usize>
-    PushBuf<T, CHUNK_N, BUFFER_N>
+impl<T> PushBuf<T>
 where
     T: NoUninit,
 {
@@ -89,26 +88,38 @@ where
     /// - `device`: WGPU Device.
     /// - `label`: Label for the main buffer into which values are written.
     /// - `usage`: Use of the buffer. `BufferUsages::COPY_DST` will always
-    ///            be included here.
+    ///   be included here.
+    /// - `buffer_item_capacity`: Number of items of type `T` that can fit
+    ///   in the buffer.
+    /// - `chunk_item_capacity`: Number of items of type `T` that can fit
+    ///   in the staging buffer.
     pub fn new(
         device: Arc<Device>,
         label: Option<&str>,
         usage: BufferUsages,
+        buffer_item_capacity: usize,
+        chunk_item_capacity: usize,
     ) -> Self {
-        debug_assert!(CHUNK_N > 0);
-        debug_assert!(BUFFER_N > 0);
-        debug_assert!(CHUNK_N < BUFFER_N);
+        debug_assert!(chunk_item_capacity > 0);
+        debug_assert!(buffer_item_capacity > 0);
+        debug_assert!(chunk_item_capacity <= buffer_item_capacity);
 
         PushBuf {
             device: device.clone(),
             encoder: None,
-            buffer: create_buffer::<BUFFER_N, T>(device.clone(), label, usage),
+            buffer: create_buffer::<T>(
+                device.clone(),
+                label,
+                usage,
+                buffer_item_capacity,
+            ),
+            buffer_item_capacity,
             buffer_byte_offset: 0,
             view: None,
             view_byte_offset: 0,
             item_count: 0,
-            belt: create_staging_belt::<T, CHUNK_N>(),
-            chunk_size: CHUNK_N * size_of::<T>(),
+            belt: create_staging_belt::<T>(chunk_item_capacity),
+            chunk_item_capacity,
             #[cfg(debug_assertions)]
             state: State::Created,
             _phantom: PhantomData,
@@ -167,7 +178,7 @@ where
         }
 
         // Check we haven't exceeded the buffer capacity.
-        if self.item_count >= BUFFER_N {
+        if self.item_count >= self.buffer_item_capacity {
             return Err(Error::CapacityExceeded);
         }
 
@@ -180,7 +191,7 @@ where
         self.write_view(value);
 
         // If the staging belt buffer is full, release it back to the GPU.
-        if self.view_byte_offset >= self.chunk_size {
+        if self.view_byte_offset >= self.chunk_size_bytes() {
             self.finish_view();
         }
 
@@ -264,14 +275,15 @@ where
             self.check_state();
         }
         debug_assert!(self.view.is_none());
-        debug_assert!(self.item_count < BUFFER_N);
+        debug_assert!(self.item_count < self.buffer_item_capacity);
 
         // Clamp chunk size at the buffer boundary.
         let remaining_space =
-            BUFFER_N * size_of::<T>() - self.buffer_byte_offset;
-        let chunk_size =
-            NonZero::new(self.chunk_size.min(remaining_space) as BufferAddress)
-                .unwrap();
+            self.buffer_size_bytes() - self.buffer_byte_offset;
+        let chunk_size = NonZero::new(
+            self.chunk_size_bytes().min(remaining_space) as BufferAddress,
+        )
+        .unwrap();
 
         // Create a view onto the staging buffer chunk.
         let view = self.belt.write_buffer(
@@ -317,10 +329,10 @@ where
     /// Writes `value` into the current view at the current offset.
     fn write_view(&mut self, value: T) {
         debug_assert!(self.view.is_some());
-        debug_assert!(self.chunk_size % size_of::<T>() == 0);
-        debug_assert!(self.view_byte_offset < self.chunk_size);
-        debug_assert!(self.buffer_byte_offset < BUFFER_N * size_of::<T>());
-        debug_assert!(self.item_count < BUFFER_N);
+        debug_assert!(self.chunk_size_bytes() % size_of::<T>() == 0);
+        debug_assert!(self.view_byte_offset < self.chunk_size_bytes());
+        debug_assert!(self.buffer_byte_offset < self.buffer_size_bytes());
+        debug_assert!(self.item_count < self.buffer_item_capacity);
 
         let s = self.view_byte_offset;
         let e = s + size_of::<T>();
@@ -331,6 +343,16 @@ where
 
         self.view_byte_offset = e;
         self.item_count += 1;
+    }
+
+    /// Returns the size of a chunk in bytes.
+    fn chunk_size_bytes(&self) -> usize {
+        self.chunk_item_capacity * size_of::<T>()
+    }
+
+    /// Returns the size of the buffer in bytes.
+    fn buffer_size_bytes(&self) -> usize {
+        self.buffer_item_capacity * size_of::<T>()
     }
 
     /// Checks some state invariants during debug builds.
@@ -365,12 +387,13 @@ pub enum Error {
 }
 
 /// Creates the main WGPU buffer.
-fn create_buffer<const BUFFER_N: usize, T>(
-    device: Arc<wgpu::Device>,
+fn create_buffer<T>(
+    device: Arc<Device>,
     label: Option<&str>,
-    usage: wgpu::BufferUsages,
-) -> wgpu::Buffer {
-    let buffer_size_bytes = BUFFER_N * size_of::<T>();
+    usage: BufferUsages,
+    buffer_item_capacity: usize,
+) -> Buffer {
+    let buffer_size_bytes = buffer_item_capacity * size_of::<T>();
     let usage = BufferUsages::COPY_DST | usage;
     let mapped_at_creation = false;
     let buffer_descriptor = wgpu::BufferDescriptor {
@@ -383,8 +406,8 @@ fn create_buffer<const BUFFER_N: usize, T>(
 }
 
 /// Creates the staging belt.
-fn create_staging_belt<T, const CHUNK_N: usize>() -> StagingBelt {
-    let chunk_size_bytes = CHUNK_N * size_of::<T>();
+fn create_staging_belt<T>(chunk_item_capacity: usize) -> StagingBelt {
+    let chunk_size_bytes = chunk_item_capacity * size_of::<T>();
     StagingBelt::new(chunk_size_bytes as BufferAddress)
 }
 
