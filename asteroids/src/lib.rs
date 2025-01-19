@@ -81,14 +81,6 @@ impl App {
     /// **Native** applications.
     const LOG_LEVEL_FILTER: Option<LevelFilter> = None; // Some(LevelFilter::Debug);
 
-    /// Background color.
-    const BACKGROUND_COLOR: wgpu::Color = wgpu::Color {
-        r: 0.05,
-        g: 0.07,
-        b: 0.09,
-        a: 1.0,
-    };
-
     /// Size of a rendering bucket.
     const TILE_SIZE: u32 = 32;
 
@@ -305,9 +297,10 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Command Encoder"),
-        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Command Encoder"),
+            });
 
         // TODO: Remove.
         let width = 100.0 * (0.95 * (tsec * 1.5).sin() as f32 + 1.0);
@@ -339,7 +332,8 @@ impl App {
         );
         let frac = (tsec.sin() as f32 + 1.0) / 2.0;
         let angle = PI / 2.0 * frac;
-        let end = P2::new(40.0 + 1024.0 * angle.cos(), 40.0 + 1024.0 * angle.sin());
+        let end =
+            P2::new(40.0 + 1024.0 * angle.cos(), 40.0 + 1024.0 * angle.sin());
         self.beamline_renderer().borrow_mut().line(
             Line::new(P2::new(40.0, 40.0), end),
             &beamline::LineStyle {
@@ -351,9 +345,12 @@ impl App {
         self.beamline_renderer().borrow_mut().set_draw_tiles(true);
 
         // Render to the surface from the beamline renderer.
-        self.beamline_renderer()
-            .borrow_mut()
-            .render(device, &mut encoder, queue, &view);
+        self.beamline_renderer().borrow_mut().render(
+            device,
+            &mut encoder,
+            queue,
+            &view,
+        );
 
         queue.submit(std::iter::once(encoder.finish()));
         output_texture.present();
@@ -415,7 +412,12 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _id: WindowId,
+        event: WindowEvent,
+    ) {
         // Finish any WGPU static setup. This just bails immediately if the
         // setup has been completed.
         if !self.extra_wgpu_setup_completed {
