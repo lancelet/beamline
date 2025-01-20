@@ -9,7 +9,7 @@ path = "src/lib.rs"
 name = "beamline_line"
 
 [dependencies]
-bytemuck = "1.21.0"
+bytemuck = { version = "1.21.0", features = ["derive"] }
 futures = "0.3.31"
 rand = "0.8.5"
 wgpu = "23.0.1"

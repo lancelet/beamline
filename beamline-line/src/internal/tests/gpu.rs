@@ -4,6 +4,9 @@ use std::sync::Arc;
 use wgpu::{Device, Instance, Queue};
 
 /// Encapsulates GPU (WGPU) basic classes for testing.
+///
+/// This is probably not suitable for use in non-test code, because we block
+/// while waiting for the GPU resources to be created.
 pub struct Gpu {
     pub device: Arc<Device>,
     pub queue: Queue,
