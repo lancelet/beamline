@@ -3,10 +3,6 @@
  * PURPOSE: Compute shader to bin lines into tiles.
  */
 
-/**** CONSTANTS ****/
-
-const MAX_U32: u32 = 0xffffffffu;
-
 /**** BINDINGS ****/
 
 /// Dimensions.
@@ -36,17 +32,11 @@ struct Dimensions {
     tile_height : u32
 };
 
-struct Strides {
-    line_stride   : u32,
-    tile_x_stride : u32,
-    tile_y_stride : u32
-};
+/// Strides: line, tile_y, tile_x.
+alias Strides = vec3u;
 
-struct BinCoord {
-    line   : u32,
-    tile_x : u32,
-    tile_y : u32
-};
+/// Bin coordinates: line, line_y, line_x.
+alias BinCoord = vec3u;
 
 struct StyledLine {
     start  : vec2f,
@@ -118,7 +108,7 @@ fn set_bin(
     strides : Strides,
     coord   : BinCoord
 ) {
-    let lindex = bin_lindex(strides, coord);
+    let lindex = dot(strides, coord);
     atomicOr(
         &bins[lindex / 32],
         u32(1) << (lindex % 32)
@@ -135,17 +125,6 @@ fn dimensions_to_strides(
     let tile_y_stride = tile_x_stride * dims.n_tiles_x;
     let line_stride   = tile_y_stride * dims.n_tiles_y;
     return Strides(line_stride, tile_x_stride, tile_y_stride);
-}
-
-/// Computes the linear index of a bin from its coordinate index.
-fn bin_lindex(
-    strides : Strides,
-    coord   : BinCoord
-) -> u32 {
-    return
-        coord.line   * strides.line_stride   +
-        coord.tile_x * strides.tile_x_stride +
-        coord.tile_y * strides.tile_y_stride;
 }
 
 /// Computes the bounding-box of a line.
